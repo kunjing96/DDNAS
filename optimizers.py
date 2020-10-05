@@ -1,6 +1,3 @@
-#####################################################
-# Copyright (c) Xuanyi Dong [GitHub D-X-Y], 2019.01 #
-#####################################################
 import math, torch
 import torch.nn as nn
 from bisect import bisect_right
@@ -171,34 +168,3 @@ class CrossEntropyLabelSmooth(nn.Module):
     targets = (1 - self.epsilon) * targets + self.epsilon / self.num_classes
     loss = (-targets * log_probs).mean(0).sum()
     return loss
-
-
-
-def get_optim_scheduler(parameters, config):
-  assert hasattr(config, 'optim') and hasattr(config, 'scheduler') and hasattr(config, 'criterion'), 'config must have optim / scheduler / criterion keys instead of {:}'.format(config)
-  if config.optim == 'SGD':
-    optim = torch.optim.SGD(parameters, config.LR, momentum=config.momentum, weight_decay=config.decay, nesterov=config.nesterov)
-  elif config.optim == 'RMSprop':
-    optim = torch.optim.RMSprop(parameters, config.LR, momentum=config.momentum, weight_decay=config.decay)
-  else:
-    raise ValueError('invalid optim : {:}'.format(config.optim))
-
-  if config.scheduler == 'cos':
-    T_max = getattr(config, 'T_max', config.epochs)
-    scheduler = CosineAnnealingLR(optim, config.warmup, config.epochs, T_max, config.eta_min)
-  elif config.scheduler == 'multistep':
-    scheduler = MultiStepLR(optim, config.warmup, config.epochs, config.milestones, config.gammas)
-  elif config.scheduler == 'exponential':
-    scheduler = ExponentialLR(optim, config.warmup, config.epochs, config.gamma)
-  elif config.scheduler == 'linear':
-    scheduler = LinearLR(optim, config.warmup, config.epochs, config.LR, config.LR_min)
-  else:
-    raise ValueError('invalid scheduler : {:}'.format(config.scheduler))
-
-  if config.criterion == 'Softmax':
-    criterion = torch.nn.CrossEntropyLoss()
-  elif config.criterion == 'SmoothSoftmax':
-    criterion = CrossEntropyLabelSmooth(config.class_num, config.label_smooth)
-  else:
-    raise ValueError('invalid criterion : {:}'.format(config.criterion))
-  return optim, scheduler, criterion

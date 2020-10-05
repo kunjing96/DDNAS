@@ -11,7 +11,7 @@ def prepare_seed(rand_seed):
 
 def prepare_logger(xargs):
   args = copy.deepcopy( xargs )
-  from log_utils import Logger
+  from logger import Logger
   logger = Logger(args.save_dir, args.rand_seed)
   logger.log('Main Function with logger : {:}'.format(logger))
   logger.log('Arguments : -------------------------------')
@@ -63,3 +63,93 @@ def dict2config(xdict, logger):
   content   = Arguments(**xdict)
   if hasattr(logger, 'log'): logger.log('{:}'.format(content))
   return content
+
+
+def get_optim_scheduler(parameters, config):
+  assert hasattr(config, 'optim') and hasattr(config, 'scheduler') and hasattr(config, 'criterion'), 'config must have optim / scheduler / criterion keys instead of {:}'.format(config)
+  if config.optim == 'SGD':
+    optim = torch.optim.SGD(parameters, config.LR, momentum=config.momentum, weight_decay=config.decay, nesterov=config.nesterov)
+  elif config.optim == 'RMSprop':
+    optim = torch.optim.RMSprop(parameters, config.LR, momentum=config.momentum, weight_decay=config.decay)
+  else:
+    raise ValueError('invalid optim : {:}'.format(config.optim))
+
+  if config.scheduler == 'cos':
+    from optimizers import CosineAnnealingLR
+    T_max = getattr(config, 'T_max', config.epochs)
+    scheduler = CosineAnnealingLR(optim, config.warmup, config.epochs, T_max, config.eta_min)
+  elif config.scheduler == 'multistep':
+    from optimizers import MultiStepLR
+    scheduler = MultiStepLR(optim, config.warmup, config.epochs, config.milestones, config.gammas)
+  elif config.scheduler == 'exponential':
+    from optimizers import ExponentialLR
+    scheduler = ExponentialLR(optim, config.warmup, config.epochs, config.gamma)
+  elif config.scheduler == 'linear':
+    from optimizers import LinearLR
+    scheduler = LinearLR(optim, config.warmup, config.epochs, config.LR, config.LR_min)
+  else:
+    raise ValueError('invalid scheduler : {:}'.format(config.scheduler))
+
+  if config.criterion == 'Softmax':
+    criterion = torch.nn.CrossEntropyLoss()
+  elif config.criterion == 'SmoothSoftmax':
+    from optimizers import CrossEntropyLabelSmooth
+    criterion = CrossEntropyLabelSmooth(config.class_num, config.label_smooth)
+  else:
+    raise ValueError('invalid criterion : {:}'.format(config.criterion))
+  return optim, scheduler, criterion
+
+
+class AverageMeter(object):     
+  """Computes and stores the average and current value"""    
+  def __init__(self):   
+    self.reset()
+  
+  def reset(self):
+    self.val   = 0.0
+    self.avg   = 0.0
+    self.sum   = 0.0
+    self.count = 0.0
+  
+  def update(self, val, n=1): 
+    self.val = val    
+    self.sum += val * n     
+    self.count += n
+    self.avg = self.sum / self.count    
+
+  def __repr__(self):
+    return ('{name}(val={val}, avg={avg}, count={count})'.format(name=self.__class__.__name__, **self.__dict__))
+
+
+def convert_secs2time(epoch_time, return_str=False):    
+  need_hour = int(epoch_time / 3600)
+  need_mins = int((epoch_time - 3600*need_hour) / 60)  
+  need_secs = int(epoch_time - 3600*need_hour - 60*need_mins)
+  if return_str:
+    str = '[{:02d}:{:02d}:{:02d}]'.format(need_hour, need_mins, need_secs)
+    return str
+  else:
+    return need_hour, need_mins, need_secs
+
+
+def time_string():
+  ISOTIMEFORMAT='%Y-%m-%d %X'
+  string = '[{:}]'.format(time.strftime( ISOTIMEFORMAT, time.gmtime(time.time()) ))
+  return string
+
+
+def obtain_accuracy(output, target, topk=(1,)):
+  """Computes the precision@k for the specified values of k"""
+  maxk = max(topk)
+  batch_size = target.size(0)
+
+  _, pred = output.topk(maxk, 1, True, True)
+  pred = pred.t()
+  correct = pred.eq(target.view(1, -1).expand_as(pred))
+
+  res = []
+  for k in topk:
+    correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
+    res.append(correct_k.mul_(100.0 / batch_size))
+  return res
+

@@ -1,20 +1,11 @@
-##################################################
-# Copyright (c) Xuanyi Dong [GitHub D-X-Y], 2020 #
-###########################################################################
-# Searching for A Robust Neural Architecture in Four GPU Hours, CVPR 2019 #
-###########################################################################
 import sys, time, random, argparse
 from copy import deepcopy
 import torch
-from pathlib import Path
-lib_dir = (Path(__file__).parent / '..' / '..' / 'lib').resolve()
-if str(lib_dir) not in sys.path: sys.path.insert(0, str(lib_dir))
 from data import get_datasets, get_nas_search_loaders
-from utils import prepare_seed, prepare_logger, save_checkpoint, copy_checkpoint, get_model_infos, obtain_accuracy, AverageMeter, time_string, convert_secs2time, load_config, dict2config
-from optimizers import get_optim_scheduler
+from utils import prepare_seed, prepare_logger, save_checkpoint, copy_checkpoint, obtain_accuracy, AverageMeter, time_string, convert_secs2time, load_config, dict2config, get_optim_scheduler
+from flop_benchmark import get_model_infos
 from operations import SearchSpaceNames
 from models import NASNetwork
-from nas_201_api import NASBench201API as API
 
 
 def search_func(xloader, network, criterion, scheduler, w_optimizer, a_optimizer, epoch_str, print_freq, logger):
@@ -106,11 +97,6 @@ def main(xargs):
   flop, param  = get_model_infos(search_model, xshape)
   logger.log('FLOP = {:.2f} M, Params = {:.2f} MB'.format(flop, param))
   logger.log('search-space [{:} ops] : {:}'.format(len(search_space), search_space))
-  if xargs.arch_nas_dataset is None:
-    api = None
-  else:
-    api = API(xargs.arch_nas_dataset)
-  logger.log('{:} create API = {:} done'.format(time_string(), api))
 
   last_info, model_base_path, model_best_path = logger.path('info'), logger.path('model'), logger.path('best')
   network, criterion = torch.nn.DataParallel(search_model).cuda(), criterion.cuda()
@@ -175,7 +161,6 @@ def main(xargs):
       copy_checkpoint(model_base_path, model_best_path, logger)
     with torch.no_grad():
       logger.log('{:}'.format(search_model.show_alphas()))
-    if api is not None: logger.log('{:}'.format(api.query_by_arch(genotypes[epoch], '200')))
     # measure elapsed time
     epoch_time.update(time.time() - start_time)
     start_time = time.time()
@@ -183,7 +168,6 @@ def main(xargs):
   logger.log('\n' + '-'*100)
   # check the performance from the architecture dataset
   logger.log('GDAS : run {:} epochs, cost {:.1f} s, last-geno is {:}.'.format(total_epoch, search_time.sum, genotypes[total_epoch-1]))
-  if api is not None: logger.log('{:}'.format(api.query_by_arch(genotypes[total_epoch-1], '200')))
   logger.close()
   
 
@@ -208,7 +192,6 @@ if __name__ == '__main__':
   # log
   parser.add_argument('--workers',            type=int,   default=2,    help='number of data loading workers (default: 2)')
   parser.add_argument('--save_dir',           type=str,   help='Folder to save checkpoints and log.')
-  parser.add_argument('--arch_nas_dataset',   type=str,   help='The path to load the architecture dataset (tiny-nas-benchmark).')
   parser.add_argument('--print_freq',         type=int,   help='print frequency (default: 200)')
   parser.add_argument('--rand_seed',          type=int,   help='manual seed')
   args = parser.parse_args()
