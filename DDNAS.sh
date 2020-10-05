@@ -13,7 +13,7 @@ track_running_stats=$2
 seed=$3
 space=darts
 
-data_path="~/dataset/$dataset"
+data_path=~/dataset/${dataset}
 
 save_dir=./output/search-cell-${space}/DDNAS-${dataset}-BN${track_running_stats}
 

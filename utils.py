@@ -1,4 +1,5 @@
-import os, sys, torch, random, PIL, copy, numpy as np
+import os, sys, torch, random, PIL, copy, json, numpy as np
+from collections import namedtuple
 
 
 def prepare_seed(rand_seed):
@@ -39,6 +40,35 @@ def get_machine_info():
   else:
     info+= "\nDoes not set CUDA_VISIBLE_DEVICES"
   return info
+
+
+support_types = ('str', 'int', 'bool', 'float', 'none')
+
+def convert_param(original_lists):
+  assert isinstance(original_lists, list), 'The type is not right : {:}'.format(original_lists)
+  ctype, value = original_lists[0], original_lists[1]
+  assert ctype in support_types, 'Ctype={:}, support={:}'.format(ctype, support_types)
+  is_list = isinstance(value, list)
+  if not is_list: value = [value]
+  outs = []
+  for x in value:
+    if ctype == 'int':
+      x = int(x)
+    elif ctype == 'str':
+      x = str(x)
+    elif ctype == 'bool':
+      x = bool(int(x))
+    elif ctype == 'float':
+      x = float(x)
+    elif ctype == 'none':
+      if x.lower() != 'none':
+        raise ValueError('For the none type, the value must be none instead of {:}'.format(x))
+      x = None
+    else:
+      raise TypeError('Does not know this type : {:}'.format(ctype))
+    outs.append(x)
+  if not is_list: outs = outs[0]
+  return outs
 
 
 def load_config(path, extra, logger):
@@ -153,3 +183,20 @@ def obtain_accuracy(output, target, topk=(1,)):
     res.append(correct_k.mul_(100.0 / batch_size))
   return res
 
+
+def save_checkpoint(state, filename, logger):
+  if osp.isfile(filename):
+    if hasattr(logger, 'log'): logger.log('Find {:} exist, delete is at first before saving'.format(filename))
+    os.remove(filename)
+  torch.save(state, filename)
+  assert osp.isfile(filename), 'save filename : {:} failed, which is not found.'.format(filename)
+  if hasattr(logger, 'log'): logger.log('save checkpoint into {:}'.format(filename))
+  return filename
+
+
+def copy_checkpoint(src, dst, logger):
+  if osp.isfile(dst):
+    if hasattr(logger, 'log'): logger.log('Find {:} exist, delete is at first before saving'.format(dst))
+    os.remove(dst)
+  copyfile(src, dst)
+  if hasattr(logger, 'log'): logger.log('copy the file from {:} into {:}'.format(src, dst))
