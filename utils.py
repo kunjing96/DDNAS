@@ -200,3 +200,18 @@ def copy_checkpoint(src, dst, logger):
     os.remove(dst)
   copyfile(src, dst)
   if hasattr(logger, 'log'): logger.log('copy the file from {:} into {:}'.format(src, dst))
+
+
+def disturb(original_genos, disturb_rate):
+  new_genos = []
+  for i in range(len(original_genos)):
+    new_geno = []
+    for j in range(len(original_genos[i])):
+      l, r = original_genos[i][j][0], original_genos[i][j][1]
+      if l[0] is not None and l[1] != -1 and np.random.random() < disturb_rate:
+        l = (None, -1)
+      if r[0] is not None and r[1] != -1 and np.random.random() < disturb_rate:
+        r = (None, -1)
+      new_geno.append((l, r))
+    new_genos.append(new_geno)
+  return new_genos
