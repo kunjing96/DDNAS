@@ -59,6 +59,73 @@ def search_func(xloader, network, criterion, scheduler, w_optimizer, a_optimizer
   return base_losses.avg, base_top1.avg, base_top5.avg, arch_losses.avg, arch_top1.avg, arch_top5.avg
 
 
+def train_func(xloader, network, criterion, scheduler, optimizer, epoch_str, print_freq, logger):
+  data_time, batch_time = AverageMeter(), AverageMeter()
+  losses, top1, top5 = AverageMeter(), AverageMeter(), AverageMeter()
+  network.train()
+  end = time.time()
+  for step, (inputs, targets) in enumerate(xloader):
+    scheduler.update(None, 1.0 * step / len(xloader))
+    targets = targets.cuda(non_blocking=True)
+    # measure data loading time
+    data_time.update(time.time() - end)
+    
+    # update the weights
+    optimizer.zero_grad()
+    _, logits = network(inputs)
+    loss = criterion(logits, targets)
+    loss.backward()
+    torch.nn.utils.clip_grad_norm_(network.parameters(), 5)
+    optimizer.step()
+    # record
+    prec1, prec5 = obtain_accuracy(logits.data, targets.data, topk=(1, 5))
+    losses.update(loss.item(),  inputs.size(0))
+    top1.update  (prec1.item(), inputs.size(0))
+    top5.update  (prec5.item(), inputs.size(0))
+
+    # measure elapsed time
+    batch_time.update(time.time() - end)
+    end = time.time()
+
+    if step % print_freq == 0 or step + 1 == len(xloader):
+      Sstr = '*TRAIN* ' + time_string() + ' [{:}][{:03d}/{:03d}]'.format(epoch_str, step, len(xloader))
+      Tstr = 'Time {batch_time.val:.2f} ({batch_time.avg:.2f}) Data {data_time.val:.2f} ({data_time.avg:.2f})'.format(batch_time=batch_time, data_time=data_time)
+      Wstr = 'Base [Loss {loss.val:.3f} ({loss.avg:.3f})  Prec@1 {top1.val:.2f} ({top1.avg:.2f}) Prec@5 {top5.val:.2f} ({top5.avg:.2f})]'.format(loss=losses, top1=top1, top5=top5)
+      logger.log(Sstr + ' ' + Tstr + ' ' + Wstr)
+  return losses.avg, top1.avg, top5.avg
+
+
+def test_func(xloader, network, criterion, print_freq, logger):
+  data_time, batch_time = AverageMeter(), AverageMeter()
+  losses, top1, top5 = AverageMeter(), AverageMeter(), AverageMeter()
+  network.eval()
+  end = time.time()
+  for step, (inputs, targets) in enumerate(xloader):
+    targets = targets.cuda(non_blocking=True)
+    # measure data loading time
+    data_time.update(time.time() - end)
+    
+    # update the weights
+    _, logits = network(inputs)
+    loss = criterion(logits, targets)
+    # record
+    prec1, prec5 = obtain_accuracy(logits.data, targets.data, topk=(1, 5))
+    losses.update(loss.item(),  inputs.size(0))
+    top1.update  (prec1.item(), inputs.size(0))
+    top5.update  (prec5.item(), inputs.size(0))
+
+    # measure elapsed time
+    batch_time.update(time.time() - end)
+    end = time.time()
+
+    if step % print_freq == 0 or step + 1 == len(xloader):
+      Sstr = '*TEST* ' + time_string() + ' [{:03d}/{:03d}]'.format(step, len(xloader))
+      Tstr = 'Time {batch_time.val:.2f} ({batch_time.avg:.2f}) Data {data_time.val:.2f} ({data_time.avg:.2f})'.format(batch_time=batch_time, data_time=data_time)
+      Wstr = 'Base [Loss {loss.val:.3f} ({loss.avg:.3f})  Prec@1 {top1.val:.2f} ({top1.avg:.2f}) Prec@5 {top5.val:.2f} ({top5.avg:.2f})]'.format(loss=losses, top1=top1, top5=top5)
+      logger.log(Sstr + ' ' + Tstr + ' ' + Wstr)
+  return losses.avg, top1.avg, top5.avg
+
+
 def main(xargs):
   assert torch.cuda.is_available(), 'CUDA is not available.'
   torch.backends.cudnn.enabled   = True
@@ -68,16 +135,15 @@ def main(xargs):
   prepare_seed(xargs.rand_seed)
   logger = prepare_logger(args)
 
-  train_data, valid_data, xshape, class_num = get_datasets(xargs.dataset, xargs.data_path, -1)
-  #config_path = 'configs/nas-benchmark/algos/GDAS.config'
+  train_data, test_data, xshape, class_num = get_datasets(xargs.dataset, xargs.data_path, xargs.cutout)
   config = load_config(xargs.config_path, {'class_num': class_num, 'xshape': xshape}, logger)
-  search_loader, _, valid_loader = get_nas_search_loaders(train_data, valid_data, xargs.dataset, 'configs/nas-benchmark/', config.batch_size, xargs.workers)
+  search_loader, train_loader, test_loader = get_nas_search_loaders(train_data, test_data, xargs.dataset, config.batch_size, xargs.workers)
   logger.log('||||||| {:10s} ||||||| Search-Loader-Num={:}, batch size={:}'.format(xargs.dataset, len(search_loader), config.batch_size))
   logger.log('||||||| {:10s} ||||||| Config={:}'.format(xargs.dataset, config))
 
   search_space = SearchSpaceNames[xargs.search_space_name]
   if xargs.model_config is None:
-    model_config = dict2config({'name': 'GDAS', 'C': xargs.channel, 'N': xargs.num_cells,
+    model_config = dict2config({'name': 'DDNAS', 'C': xargs.channel, 'N': xargs.num_cells,
                                 'max_nodes': xargs.max_nodes, 'num_classes': class_num,
                                 'space'    : search_space,
                                 'affine'   : False, 'track_running_stats': bool(xargs.track_running_stats)}, None)
@@ -91,9 +157,9 @@ def main(xargs):
   w_optimizer, w_scheduler, criterion = get_optim_scheduler(search_model.get_weights(), config)
   a_optimizer = torch.optim.Adam(search_model.get_alphas(), lr=xargs.arch_learning_rate, betas=(0.5, 0.999), weight_decay=xargs.arch_weight_decay)
   logger.log('w-optimizer : {:}'.format(w_optimizer))
-  logger.log('a-optimizer : {:}'.format(a_optimizer))
   logger.log('w-scheduler : {:}'.format(w_scheduler))
   logger.log('criterion   : {:}'.format(criterion))
+  logger.log('a-optimizer : {:}'.format(a_optimizer))
   flop, param  = get_model_infos(search_model, xshape)
   logger.log('FLOP = {:.2f} M, Params = {:.2f} MB'.format(flop, param))
   logger.log('search-space [{:} ops] : {:}'.format(len(search_space), search_space))
@@ -109,8 +175,8 @@ def main(xargs):
     genotypes   = checkpoint['genotypes']
     valid_accuracies = checkpoint['valid_accuracies']
     search_model.load_state_dict( checkpoint['search_model'] )
-    w_scheduler.load_state_dict ( checkpoint['w_scheduler'] )
     w_optimizer.load_state_dict ( checkpoint['w_optimizer'] )
+    w_scheduler.load_state_dict ( checkpoint['w_scheduler'] )
     a_optimizer.load_state_dict ( checkpoint['a_optimizer'] )
     logger.log("=> loading checkpoint of the last-info '{:}' start with {:}-th epoch.".format(last_info, start_epoch))
   else:
@@ -124,7 +190,7 @@ def main(xargs):
     need_time = 'Time Left: {:}'.format( convert_secs2time(epoch_time.val * (total_epoch-epoch), True) )
     epoch_str = '{:03d}-{:03d}'.format(epoch, total_epoch)
     search_model.set_tau( xargs.tau_max - (xargs.tau_max-xargs.tau_min) * epoch / (total_epoch-1) )
-    logger.log('\n[Search the {:}-th epoch] {:}, tau={:}, LR={:}'.format(epoch_str, need_time, search_model.get_tau(), min(w_scheduler.get_lr())))
+    logger.log('\n[The {:}-th epoch] {:}, tau={:}, LR={:}'.format(epoch_str, need_time, search_model.get_tau(), min(w_scheduler.get_lr())))
 
     search_w_loss, search_w_top1, search_w_top5, valid_a_loss , valid_a_top1 , valid_a_top5 \
               = search_func(search_loader, network, criterion, w_scheduler, w_optimizer, a_optimizer, epoch_str, xargs.print_freq, logger)
@@ -146,8 +212,8 @@ def main(xargs):
                 'args'  : deepcopy(xargs),
                 'search_model': search_model.state_dict(),
                 'w_optimizer' : w_optimizer.state_dict(),
-                'a_optimizer' : a_optimizer.state_dict(),
                 'w_scheduler' : w_scheduler.state_dict(),
+                'a_optimizer' : a_optimizer.state_dict(),
                 'genotypes'   : genotypes,
                 'valid_accuracies' : valid_accuracies},
                 model_base_path, logger)
@@ -167,15 +233,15 @@ def main(xargs):
 
   logger.log('\n' + '-'*100)
   # check the performance from the architecture dataset
-  logger.log('GDAS : run {:} epochs, cost {:.1f} s, last-geno is {:}.'.format(total_epoch, search_time.sum, genotypes[total_epoch-1]))
+  logger.log('DDNAS : run {:} epochs, cost {:.1f} s, last-geno is {:}.'.format(total_epoch, search_time.sum, genotypes[total_epoch-1]))
   logger.close()
   
 
-
 if __name__ == '__main__':
-  parser = argparse.ArgumentParser("GDAS")
+  parser = argparse.ArgumentParser("DDNAS")
   parser.add_argument('--data_path',          type=str,   help='Path to dataset')
-  parser.add_argument('--dataset',            type=str,   choices=['cifar10', 'cifar100', 'ImageNet16-120'], help='Choose between Cifar10/100 and ImageNet-16.')
+  parser.add_argument('--dataset',            type=str,   choices=['cifar10', 'cifar100', 'imagenet'], help='Choose between cifar10/100 and imagenet.')
+  parser.add_argument('--cutout',             type=int,   help='Cutout length.')
   # channels and number-of-cells
   parser.add_argument('--search_space_name',  type=str,   help='The search space name.')
   parser.add_argument('--max_nodes',          type=int,   help='The maximum number of nodes.')
@@ -194,6 +260,7 @@ if __name__ == '__main__':
   parser.add_argument('--save_dir',           type=str,   help='Folder to save checkpoints and log.')
   parser.add_argument('--print_freq',         type=int,   help='print frequency (default: 200)')
   parser.add_argument('--rand_seed',          type=int,   help='manual seed')
+  parser.add_argument('--init_genos',         type=str,   help='Initial genotypes.')
   args = parser.parse_args()
   if args.rand_seed is None or args.rand_seed < 0: args.rand_seed = random.randint(1, 100000)
   main(args)
