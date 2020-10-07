@@ -2,7 +2,7 @@ import sys, time, random, argparse
 from copy import deepcopy
 import torch
 from data import get_datasets, get_nas_search_loaders
-from utils import prepare_seed, prepare_logger, save_checkpoint, copy_checkpoint, obtain_accuracy, AverageMeter, time_string, convert_secs2time, load_config, dict2config, get_optim_scheduler
+from utils import prepare_seed, prepare_logger, save_checkpoint, copy_checkpoint, obtain_accuracy, AverageMeter, time_string, convert_secs2time, load_config, dict2config, get_optim_scheduler, disturb
 from flop_benchmark import get_model_infos
 from operations import SearchSpaceNames
 from models import NASNetwork
@@ -184,29 +184,50 @@ def main(xargs):
     start_epoch, valid_accuracies, genotypes = 0, {'best': -1}, {-1: search_model.genotype()}
 
   # start training
-  start_time, search_time, epoch_time, total_epoch = time.time(), AverageMeter(), AverageMeter(), config.epochs + config.warmup
-  for epoch in range(start_epoch, total_epoch):
+  start_time, search_time, epoch_time, total_epoch, genos = time.time(), AverageMeter(), AverageMeter(), config.epochs + config.warmup, xargs.init_genos
+  for epoch in range(start_epoch, total_epoch+5):
     w_scheduler.update(epoch, 0.0)
+    disturb_rate = 0.01
     need_time = 'Time Left: {:}'.format( convert_secs2time(epoch_time.val * (total_epoch-epoch), True) )
     epoch_str = '{:03d}-{:03d}'.format(epoch, total_epoch)
     search_model.set_tau( xargs.tau_max - (xargs.tau_max-xargs.tau_min) * epoch / (total_epoch-1) )
-    logger.log('\n[The {:}-th epoch] {:}, tau={:}, LR={:}'.format(epoch_str, need_time, search_model.get_tau(), min(w_scheduler.get_lr())))
+    logger.log('\n[The {:}-th epoch] {:}, tau={:}, LR={:}, dr={:}'.format(epoch_str, need_time, search_model.get_tau(), min(w_scheduler.get_lr()), disturb_rate))
 
-    search_w_loss, search_w_top1, search_w_top5, valid_a_loss , valid_a_top1 , valid_a_top5 \
-              = search_func(search_loader, network, criterion, w_scheduler, w_optimizer, a_optimizer, epoch_str, xargs.print_freq, logger)
-    search_time.update(time.time() - start_time)
-    logger.log('[{:}] searching : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%, time-cost={:.1f} s'.format(epoch_str, search_w_loss, search_w_top1, search_w_top5, search_time.sum))
-    logger.log('[{:}] evaluate  : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%'.format(epoch_str, valid_a_loss , valid_a_top1 , valid_a_top5 ))
+    if epoch % 10 in [0]:
+      search_model.set_genos(genos)
+      search_model.reset_parameters()
+      logger.log('[{:}] Set new genos and reset some parameters.'.format(epoch_str))
+    if epoch % 10 in [0, 1, 2, 3, 4]:
+      # train
+      train_loss, train_top1, train_top5 = train_func(train_loader, network, criterion, w_scheduler, w_optimizer, epoch_str, xargs.print_freq, logger)
+      search_time.update(time.time() - start_time)
+      logger.log('[{:}] training : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%, time-cost={:.1f} s'.format(epoch_str, train_loss, train_top1, train_top5, search_time.sum))
+      # valid
+      with torch.no_grad():
+        test_loss, test_top1, test_top5 = test_func(test_loader, network, criterion, xargs.print_freq, logger)
+      logger.log('[{:}] evaluate : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%'.format(epoch_str, test_loss , test_top1 , test_top5 ))
+    if epoch % 10 in [5]:
+      genos = disturb(genos, disturb_rate)
+    if epoch % 10 in [5, 6, 7, 8, 9]:
+      #search
+      search_w_loss, search_w_top1, search_w_top5, valid_a_loss , valid_a_top1 , valid_a_top5 = search_func(search_loader, network, criterion, w_scheduler, w_optimizer, a_optimizer, epoch_str, xargs.print_freq, logger)
+      search_time.update(time.time() - start_time)
+      logger.log('[{:}] searching : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%, time-cost={:.1f} s'.format(epoch_str, search_w_loss, search_w_top1, search_w_top5, search_time.sum))
+      logger.log('[{:}] evaluate  : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%'.format(epoch_str, valid_a_loss , valid_a_top1 , valid_a_top5 ))
+    if epoch % 10 in [9]:
+      genos = search_model.get_genos()
+
+    genotypes[epoch] = search_model.get_genos()
+    logger.log('<<<--->>> The {:}-th epoch : {:}'.format(epoch_str, genotypes[epoch]))
+
     # check the best accuracy
-    valid_accuracies[epoch] = valid_a_top1
+    '''valid_accuracies[epoch] = valid_a_top1
     if valid_a_top1 > valid_accuracies['best']:
       valid_accuracies['best'] = valid_a_top1
-      genotypes['best']        = search_model.genotype()
+      genotypes['best']        = search_model.get_genos()
       find_best = True
-    else: find_best = False
+    else: find_best = False'''
 
-    genotypes[epoch] = search_model.genotype()
-    logger.log('<<<--->>> The {:}-th epoch : {:}'.format(epoch_str, genotypes[epoch]))
     # save checkpoint
     save_path = save_checkpoint({'epoch' : epoch + 1,
                 'args'  : deepcopy(xargs),
@@ -222,11 +243,11 @@ def main(xargs):
           'args' : deepcopy(args),
           'last_checkpoint': save_path,
           }, logger.path('info'), logger)
-    if find_best:
+    '''if find_best:
       logger.log('<<<--->>> The {:}-th epoch : find the highest validation accuracy : {:.2f}%.'.format(epoch_str, valid_a_top1))
       copy_checkpoint(model_base_path, model_best_path, logger)
     with torch.no_grad():
-      logger.log('{:}'.format(search_model.show_alphas()))
+      logger.log('{:}'.format(search_model.show_alphas()))'''
     # measure elapsed time
     epoch_time.update(time.time() - start_time)
     start_time = time.time()
