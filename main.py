@@ -196,7 +196,7 @@ def main(xargs):
     if epoch % 10 in [0]:
       search_model.set_genos(genos)
       search_model.reset_parameters()
-      logger.log('[{:}] Set new genos and reset some parameters.'.format(epoch_str))
+      logger.log('[{:}] set new genos and reset some parameters.'.format(epoch_str))
     if epoch % 10 in [0, 1, 2, 3, 4]:
       # train
       train_loss, train_top1, train_top5 = train_func(train_loader, network, criterion, w_scheduler, w_optimizer, epoch_str, xargs.print_freq, logger)
@@ -208,6 +208,7 @@ def main(xargs):
       logger.log('[{:}] evaluate : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%'.format(epoch_str, test_loss , test_top1 , test_top5 ))
     if epoch % 10 in [5]:
       genos = disturb(genos, disturb_rate)
+      logger.log('[{:}] disturb the genotypes as :\n{:}'.format(epoch_str, genos))
     if epoch % 10 in [5, 6, 7, 8, 9]:
       #search
       search_w_loss, search_w_top1, search_w_top5, valid_a_loss , valid_a_top1 , valid_a_top5 = search_func(search_loader, network, criterion, w_scheduler, w_optimizer, a_optimizer, epoch_str, xargs.print_freq, logger)
@@ -216,17 +217,17 @@ def main(xargs):
       logger.log('[{:}] evaluate  : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%'.format(epoch_str, valid_a_loss , valid_a_top1 , valid_a_top5 ))
     if epoch % 10 in [9]:
       genos = search_model.get_genos()
+      logger.log('[{:}] get new genotypes :\n{:}'.format(epoch_str, genos))
 
     genotypes[epoch] = search_model.get_genos()
-    logger.log('<<<--->>> The {:}-th epoch : {:}'.format(epoch_str, genotypes[epoch]))
 
     # check the best accuracy
-    '''valid_accuracies[epoch] = valid_a_top1
-    if valid_a_top1 > valid_accuracies['best']:
-      valid_accuracies['best'] = valid_a_top1
+    valid_accuracies[epoch] = test_top1
+    if test_top1 > valid_accuracies['best']:
+      valid_accuracies['best'] = test_top1
       genotypes['best']        = search_model.get_genos()
       find_best = True
-    else: find_best = False'''
+    else: find_best = False
 
     # save checkpoint
     save_path = save_checkpoint({'epoch' : epoch + 1,
@@ -243,11 +244,9 @@ def main(xargs):
           'args' : deepcopy(args),
           'last_checkpoint': save_path,
           }, logger.path('info'), logger)
-    '''if find_best:
-      logger.log('<<<--->>> The {:}-th epoch : find the highest validation accuracy : {:.2f}%.'.format(epoch_str, valid_a_top1))
+    if find_best:
+      logger.log('<<<--->>> The {:}-th epoch : find the highest test accuracy : {:.2f}%.'.format(epoch_str, test_top1))
       copy_checkpoint(model_base_path, model_best_path, logger)
-    with torch.no_grad():
-      logger.log('{:}'.format(search_model.show_alphas()))'''
     # measure elapsed time
     epoch_time.update(time.time() - start_time)
     start_time = time.time()
