@@ -5,7 +5,6 @@ from data import get_datasets, get_nas_search_loaders
 from utils import prepare_seed, prepare_logger, save_checkpoint, copy_checkpoint, obtain_accuracy, AverageMeter, time_string, convert_secs2time, load_config, dict2config, get_optim_scheduler, disturb
 from flop_benchmark import get_model_infos
 from operations import SearchSpaceNames
-from models import NASNetwork
 
 
 def search_func(xloader, network, criterion, scheduler, w_optimizer, a_optimizer, epoch_str, print_freq, logger):
@@ -150,6 +149,10 @@ def main(xargs):
   else:
     model_config = load_config(xargs.model_config, {'num_classes': class_num, 'space'    : search_space,
                                                     'affine'     : False, 'track_running_stats': bool(xargs.track_running_stats)}, None)
+  if xargs.dataset == 'cifar10' or xargs.dataset == 'cifar100':
+    from models import NASNetworkCIFAR as NASNetwork
+  else:
+    from models import NASNetworkImageNet as NASNetwork
   search_model = NASNetwork(model_config.C, model_config.N, model_config.steps, model_config.multiplier, model_config.stem_multiplier, model_config.num_classes, model_config.search_space, model_config.affine, model_config.track_running_stats)
   logger.log('search-model :\n{:}'.format(search_model))
   logger.log('model-config : {:}'.format(model_config))

@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
-from operations import OPS
 from copy import deepcopy
+from operations import OPS, AuxiliaryHeadCIFAR, AuxiliaryHeadImageNet, drop_path
 
 
 class MixedOp(nn.Module):
@@ -115,7 +115,7 @@ class NASCell(nn.Module):
       str = '{:}'.format( nn.functional.softmax(self.arch_parameters, dim=-1).cpu() )
     return str
 
-  def forward(self, s0, s1, tau): # self.geno
+  def forward(self, s0, s1, tau, drop_path_keep_prob):
     def get_gumbel_prob(xins, tau):
       while True:
         gumbels = -torch.empty_like(xins).exponential_().log()
@@ -136,8 +136,8 @@ class NASCell(nn.Module):
 
     states = [s0, s1]
     for i in range(self._steps):
-      op0, pre0 = geno[i][0][0], geno[i][0][1]
-      op1, pre1 = geno[i][1][0], geno[i][1][1]
+      op0, pre0 = self.geno[i][0][0], self.geno[i][0][1]
+      op1, pre1 = self.geno[i][1][0], self.geno[i][1][1]
       no_mixed_op_edges = {}
       if pre0 != -1: no_mixed_op_edges.update({'{:}<-{:}'.format(i+2, pre0): op0})
       if pre1 != -1: no_mixed_op_edges.update({'{:}<-{:}'.format(i+2, pre1): op1})
@@ -154,7 +154,10 @@ class NASCell(nn.Module):
             weights = weightss[ self.edge2index[node_str] ]
             index   = indexs[ self.edge2index[node_str] ].item()
           else: continue
-        clist.append( op(h, weights, index) )
+        c = op(h, weights, index)
+        if self.training and drop_path_keep_prob < 1.0 and index != self.op_names.index('skip_connect'):
+          c = drop_path(c, drop_path_keep_prob)
+        clist.append( c )
 
       states.append( sum(clist) )
 
@@ -164,38 +167,19 @@ class NASCell(nn.Module):
     return ('{name}(steps={_steps}, multiplier={_multiplier}, reduction={reduction})'.format(name=self.__class__.__name__, **self.__dict__))
 
 
-class NASNetwork(nn.Module):
+class _NASNetwork(nn.Module):
 
-  def __init__(self, C, N, steps, multiplier, stem_multiplier, num_classes, search_space, affine, track_running_stats):
-    super(NASNetwork, self).__init__()
+  def __init__(self, C, N, steps, multiplier, stem_multiplier, num_classes, keep_prob, drop_path_keep_prob, search_space, affine, track_running_stats, auxiliary):
+    super(_NASNetwork, self).__init__()
     self._C        = C
     self._layerN   = N
     self._steps    = steps
     self._multiplier = multiplier
-    self.stem = nn.Sequential(
-                    nn.Conv2d(3, C*stem_multiplier, kernel_size=3, padding=1, bias=False),
-                    nn.BatchNorm2d(C*stem_multiplier))
-  
-    # config for each layer
-    layer_channels   = [C    ] * N + [C*2 ] + [C*2  ] * (N-1) + [C*4 ] + [C*4  ] * (N-1)
-    layer_reductions = [False] * N + [True] + [False] * (N-1) + [True] + [False] * (N-1)
-
-    num_edge, edge2index = None, None
-    C_prev_prev, C_prev, C_curr, reduction_prev = C*stem_multiplier, C*stem_multiplier, C, False
-
-    self.cells = nn.ModuleList()
-    for index, (C_curr, reduction) in enumerate(zip(layer_channels, layer_reductions)):
-      cell = NASCell(search_space, steps, multiplier, C_prev_prev, C_prev, C_curr, reduction, reduction_prev, affine, track_running_stats)
-      if num_edge is None: num_edge, edge2index = cell.num_edges, cell.edge2index
-      else: assert num_edge == cell.num_edges and edge2index == cell.edge2index, 'invalid {:} vs. {:}.'.format(num_edge, cell.num_edges)
-      self.cells.append( cell )
-      C_prev_prev, C_prev, reduction_prev = C_prev, multiplier*C_curr, reduction
+    self._stem_multiplier = stem_multiplier
+    self._auxiliary  = auxiliary
+    self._keep_prob = keep_prob
+    self._drop_path_keep_prob = drop_path_keep_prob
     self.op_names   = deepcopy( search_space )
-    self._Layer     = len(self.cells)
-    self.edge2index = edge2index
-    self.lastact    = nn.Sequential(nn.BatchNorm2d(C_prev), nn.ReLU(inplace=True))
-    self.global_pooling = nn.AdaptiveAvgPool2d(1)
-    self.classifier = nn.Linear(C_prev, num_classes)
 
     self.tau = 10
 
@@ -241,15 +225,112 @@ class NASNetwork(nn.Module):
     return string
 
   def extra_repr(self):
-    return ('{name}(C={_C}, N={_layerN}, steps={_steps}, multiplier={_multiplier}, L={_Layer})'.format(name=self.__class__.__name__, **self.__dict__))
+    return ('{name}(C={_C}, N={_layerN}, steps={_steps}, stem_multiplier={_stem_multiplier}, multiplier={_multiplier}, L={_Layer}, keep_prob={_keep_prob}, drop_path_keep_prob={_drop_path_keep_prob}, auxiliary={_auxiliary})'.format(name=self.__class__.__name__, **self.__dict__))
 
   def forward(self, inputs):
+    raise NotImplementedError
+
+
+class NASNetworkCIFAR(_NASNetwork):
+
+  def __init__(self, C, N, steps, multiplier, stem_multiplier, num_classes, keep_prob, drop_path_keep_prob, search_space, affine, track_running_stats, auxiliary):
+    super(NASNetworkCIFAR, self).__init__(C, N, steps, multiplier, stem_multiplier, num_classes, keep_prob, drop_path_keep_prob, search_space, affine, track_running_stats, auxiliary)
+    self.stem = nn.Sequential(
+      nn.Conv2d(3, C*stem_multiplier, kernel_size=3, padding=1, bias=False),
+      nn.BatchNorm2d(C*stem_multiplier)
+    )
+  
+    # config for each layer
+    layer_channels   = [C    ] * N + [C*2 ] + [C*2  ] * (N-1) + [C*4 ] + [C*4  ] * (N-1)
+    layer_reductions = [False] * N + [True] + [False] * (N-1) + [True] + [False] * (N-1)
+
+    num_edge, edge2index = None, None
+    C_prev_prev, C_prev, C_curr, reduction_prev = C*stem_multiplier, C*stem_multiplier, C, False
+
+    self.cells = nn.ModuleList()
+    for index, (C_curr, reduction) in enumerate(zip(layer_channels, layer_reductions)):
+      cell = NASCell(search_space, steps, multiplier, C_prev_prev, C_prev, C_curr, reduction, reduction_prev, affine, track_running_stats)
+      if num_edge is None: num_edge, edge2index = cell.num_edges, cell.edge2index
+      else: assert num_edge == cell.num_edges and edge2index == cell.edge2index, 'invalid {:} vs. {:}.'.format(num_edge, cell.num_edges)
+      self.cells.append( cell )
+      C_prev_prev, C_prev, reduction_prev = C_prev, multiplier*C_curr, reduction
+      if index == 2*N: C_to_auxiliary = C_prev
+    if self._auxiliary: self.auxiliary_head = AuxiliaryHeadCIFAR(C_to_auxiliary, num_classes)
+    self._Layer     = len(self.cells)
+    self.edge2index = edge2index
+    self.lastact    = nn.Sequential(nn.BatchNorm2d(C_prev), nn.ReLU(inplace=True))
+    self.global_pooling = nn.AdaptiveAvgPool2d(1)
+    self.dropout = nn.Dropout(1 - self._keep_prob)
+    self.classifier = nn.Linear(C_prev, num_classes)
+
+  def forward(self, inputs):
+    logits_aux = None
     s0 = s1 = self.stem(inputs)
-    for cell in self.cells:
-      s0, s1 = s1, cell(s0, s1, self.tau)
+    for index, cell in enumerate(self.cells):
+      s0, s1 = s1, cell(s0, s1, self.tau, self._drop_path_keep_prob)
+      if index == 2 * self._layerN and self._auxiliary and self.training:
+        logits_aux = self.auxiliary_head(s1)
     out = self.lastact(s1)
     out = self.global_pooling(out)
+    out = self.dropout(out)
     out = out.view(out.size(0), -1)
     logits = self.classifier(out)
 
-    return out, logits
+    return logits, logits_aux
+
+
+class NASNetworkImageNet(_NASNetwork):
+
+  def __init__(self, C, N, steps, multiplier, stem_multiplier, num_classes, keep_prob, drop_path_keep_prob, search_space, affine, track_running_stats, auxiliary):
+    super(NASNetworkImageNet, self).__init__(C, N, steps, multiplier, stem_multiplier, num_classes, keep_prob, drop_path_keep_prob, search_space, affine, track_running_stats, auxiliary)
+    self.stem0 = nn.Sequential(
+      nn.Conv2d(3, C*stem_multiplier // 2, kernel_size=3, stride=2, padding=1, bias=False),
+      nn.BatchNorm2d(C*stem_multiplier // 2),
+      nn.ReLU(inplace=False),
+      nn.Conv2d(C*stem_multiplier // 2, C*stem_multiplier, 3, stride=2, padding=1, bias=False),
+      nn.BatchNorm2d(C*stem_multiplier),
+    )
+    self.stem1 = nn.Sequential(
+      nn.ReLU(inplace=False),
+      nn.Conv2d(C*stem_multiplier, C*stem_multiplier, 3, stride=2, padding=1, bias=False),
+      nn.BatchNorm2d(C*stem_multiplier),
+    )
+  
+    # config for each layer
+    layer_channels   = [C    ] * N + [C*2 ] + [C*2  ] * (N-1) + [C*4 ] + [C*4  ] * (N-1)
+    layer_reductions = [False] * N + [True] + [False] * (N-1) + [True] + [False] * (N-1)
+
+    num_edge, edge2index = None, None
+    C_prev_prev, C_prev, C_curr, reduction_prev = C*stem_multiplier, C*stem_multiplier, C, False
+
+    self.cells = nn.ModuleList()
+    for index, (C_curr, reduction) in enumerate(zip(layer_channels, layer_reductions)):
+      cell = NASCell(search_space, steps, multiplier, C_prev_prev, C_prev, C_curr, reduction, reduction_prev, affine, track_running_stats)
+      if num_edge is None: num_edge, edge2index = cell.num_edges, cell.edge2index
+      else: assert num_edge == cell.num_edges and edge2index == cell.edge2index, 'invalid {:} vs. {:}.'.format(num_edge, cell.num_edges)
+      self.cells.append( cell )
+      C_prev_prev, C_prev, reduction_prev = C_prev, multiplier*C_curr, reduction
+      if index == 2*N: C_to_auxiliary = C_prev
+    if self._auxiliary: self.auxiliary_head = AuxiliaryHeadImageNet(C_to_auxiliary, num_classes)
+    self._Layer     = len(self.cells)
+    self.edge2index = edge2index
+    self.lastact    = nn.Sequential(nn.BatchNorm2d(C_prev), nn.ReLU(inplace=True))
+    self.global_pooling = nn.AdaptiveAvgPool2d(1)
+    self.dropout = nn.Dropout(1 - self._keep_prob)
+    self.classifier = nn.Linear(C_prev, num_classes)
+
+  def forward(self, inputs):
+    logits_aux = None
+    s0 = self.stem0(input)
+    s1 = self.stem1(s0)
+    for index, cell in enumerate(self.cells):
+      s0, s1 = s1, cell(s0, s1, self.tau, self._drop_path_keep_prob)
+      if index == 2 * self._layerN and self._auxiliary and self.training:
+        logits_aux = self.auxiliary_head(s1)
+    out = self.lastact(s1)
+    out = self.global_pooling(out)
+    out = self.dropout(out)
+    out = out.view(out.size(0), -1)
+    logits = self.classifier(out)
+
+    return logits, logits_aux

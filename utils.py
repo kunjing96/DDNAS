@@ -123,7 +123,7 @@ def get_optim_scheduler(parameters, config):
   if config.criterion == 'Softmax':
     criterion = torch.nn.CrossEntropyLoss()
   elif config.criterion == 'SmoothSoftmax':
-    from operations import CrossEntropyLabelSmooth
+    from optimizers import CrossEntropyLabelSmooth
     criterion = CrossEntropyLabelSmooth(config.class_num, config.label_smooth)
   else:
     raise ValueError('invalid criterion : {:}'.format(config.criterion))
