@@ -122,12 +122,14 @@ def get_optim_scheduler(parameters, config):
 
   if config.criterion == 'Softmax':
     criterion = torch.nn.CrossEntropyLoss()
+    criterion_smooth = None
   elif config.criterion == 'SmoothSoftmax':
+    criterion = torch.nn.CrossEntropyLoss()
     from optimizers import CrossEntropyLabelSmooth
-    criterion = CrossEntropyLabelSmooth(config.class_num, config.label_smooth)
+    criterion_smooth = CrossEntropyLabelSmooth(config.class_num, config.label_smooth)
   else:
     raise ValueError('invalid criterion : {:}'.format(config.criterion))
-  return optim, scheduler, criterion
+  return optim, scheduler, criterion, criterion_smooth
 
 
 class AverageMeter(object):     

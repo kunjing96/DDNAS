@@ -176,7 +176,7 @@ class _NASNetwork(nn.Module):
     self._steps    = steps
     self._multiplier = multiplier
     self._stem_multiplier = stem_multiplier
-    self._auxiliary  = auxiliary
+    self.auxiliary  = auxiliary
     self._keep_prob = keep_prob
     self._drop_path_keep_prob = drop_path_keep_prob
     self.op_names   = deepcopy( search_space )
@@ -225,7 +225,7 @@ class _NASNetwork(nn.Module):
     return string
 
   def extra_repr(self):
-    return ('{name}(C={_C}, N={_layerN}, steps={_steps}, stem_multiplier={_stem_multiplier}, multiplier={_multiplier}, L={_Layer}, keep_prob={_keep_prob}, drop_path_keep_prob={_drop_path_keep_prob}, auxiliary={_auxiliary})'.format(name=self.__class__.__name__, **self.__dict__))
+    return ('{name}(C={_C}, N={_layerN}, steps={_steps}, stem_multiplier={_stem_multiplier}, multiplier={_multiplier}, L={_Layer}, keep_prob={_keep_prob}, drop_path_keep_prob={_drop_path_keep_prob}, auxiliary={auxiliary})'.format(name=self.__class__.__name__, **self.__dict__))
 
   def forward(self, inputs):
     raise NotImplementedError
@@ -255,7 +255,7 @@ class NASNetworkCIFAR(_NASNetwork):
       self.cells.append( cell )
       C_prev_prev, C_prev, reduction_prev = C_prev, multiplier*C_curr, reduction
       if index == 2*N: C_to_auxiliary = C_prev
-    if self._auxiliary: self.auxiliary_head = AuxiliaryHeadCIFAR(C_to_auxiliary, num_classes)
+    if self.auxiliary: self.auxiliary_head = AuxiliaryHeadCIFAR(C_to_auxiliary, num_classes)
     self._Layer     = len(self.cells)
     self.edge2index = edge2index
     self.lastact    = nn.Sequential(nn.BatchNorm2d(C_prev), nn.ReLU(inplace=True))
@@ -268,7 +268,7 @@ class NASNetworkCIFAR(_NASNetwork):
     s0 = s1 = self.stem(inputs)
     for index, cell in enumerate(self.cells):
       s0, s1 = s1, cell(s0, s1, self.tau, self._drop_path_keep_prob)
-      if index == 2 * self._layerN and self._auxiliary and self.training:
+      if index == 2 * self._layerN and self.auxiliary and self.training:
         logits_aux = self.auxiliary_head(s1)
     out = self.lastact(s1)
     out = self.global_pooling(out)
@@ -311,7 +311,7 @@ class NASNetworkImageNet(_NASNetwork):
       self.cells.append( cell )
       C_prev_prev, C_prev, reduction_prev = C_prev, multiplier*C_curr, reduction
       if index == 2*N: C_to_auxiliary = C_prev
-    if self._auxiliary: self.auxiliary_head = AuxiliaryHeadImageNet(C_to_auxiliary, num_classes)
+    if self.auxiliary: self.auxiliary_head = AuxiliaryHeadImageNet(C_to_auxiliary, num_classes)
     self._Layer     = len(self.cells)
     self.edge2index = edge2index
     self.lastact    = nn.Sequential(nn.BatchNorm2d(C_prev), nn.ReLU(inplace=True))
@@ -325,7 +325,7 @@ class NASNetworkImageNet(_NASNetwork):
     s1 = self.stem1(s0)
     for index, cell in enumerate(self.cells):
       s0, s1 = s1, cell(s0, s1, self.tau, self._drop_path_keep_prob)
-      if index == 2 * self._layerN and self._auxiliary and self.training:
+      if index == 2 * self._layerN and self.auxiliary and self.training:
         logits_aux = self.auxiliary_head(s1)
     out = self.lastact(s1)
     out = self.global_pooling(out)

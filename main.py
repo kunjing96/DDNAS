@@ -35,7 +35,7 @@ def search_func(xloader, network, criterion, scheduler, w_optimizer, a_optimizer
 
     # update the architecture-weight
     a_optimizer.zero_grad()
-    _, logits = network(arch_inputs)
+    logits, logits_aux = network(arch_inputs)
     arch_loss = criterion(logits, arch_targets)
     arch_loss.backward()
     a_optimizer.step()
@@ -71,8 +71,11 @@ def train_func(xloader, network, criterion, scheduler, optimizer, epoch_str, pri
     
     # update the weights
     optimizer.zero_grad()
-    _, logits = network(inputs)
+    logits, logits_aux = network(inputs)
     loss = criterion(logits, targets)
+    if network.auxiliary:
+      loss_aux = criterion(logits_aux, targets)
+      loss = loss + 0.4*loss_aux
     loss.backward()
     torch.nn.utils.clip_grad_norm_(network.parameters(), 5)
     optimizer.step()
@@ -105,7 +108,7 @@ def test_func(xloader, network, criterion, print_freq, logger):
     data_time.update(time.time() - end)
     
     # update the weights
-    _, logits = network(inputs)
+    logits, _ = network(inputs)
     loss = criterion(logits, targets)
     # record
     prec1, prec5 = obtain_accuracy(logits.data, targets.data, topk=(1, 5))
@@ -141,23 +144,16 @@ def main(xargs):
   logger.log('||||||| {:10s} ||||||| Config={:}'.format(xargs.dataset, config))
 
   search_space = SearchSpaceNames[xargs.search_space_name]
-  if xargs.model_config is None:
-    model_config = dict2config({'name': 'DDNAS', 'C': xargs.channel, 'N': xargs.num_cells,
-                                'max_nodes': xargs.max_nodes, 'num_classes': class_num,
-                                'space'    : search_space,
-                                'affine'   : False, 'track_running_stats': bool(xargs.track_running_stats)}, None)
-  else:
-    model_config = load_config(xargs.model_config, {'num_classes': class_num, 'space'    : search_space,
-                                                    'affine'     : False, 'track_running_stats': bool(xargs.track_running_stats)}, None)
+  model_config = load_config(xargs.model_config, {"num_classes": class_num, "space" : search_space, "affine" : False, "auxiliary": True, "track_running_stats": True}, None)
   if xargs.dataset == 'cifar10' or xargs.dataset == 'cifar100':
     from models import NASNetworkCIFAR as NASNetwork
   else:
     from models import NASNetworkImageNet as NASNetwork
-  search_model = NASNetwork(model_config.C, model_config.N, model_config.steps, model_config.multiplier, model_config.stem_multiplier, model_config.num_classes, model_config.search_space, model_config.affine, model_config.track_running_stats)
+  search_model = NASNetwork(model_config.C, model_config.N, model_config.steps, model_config.multiplier, model_config.stem_multiplier, model_config.num_classes, model_config.keep_prob, model_config.drop_path_keep_prob, model_config.space, model_config.affine, model_config.track_running_stats, model_config.auxiliary)
   logger.log('search-model :\n{:}'.format(search_model))
   logger.log('model-config : {:}'.format(model_config))
   
-  w_optimizer, w_scheduler, criterion = get_optim_scheduler(search_model.get_weights(), config)
+  w_optimizer, w_scheduler, criterion, criterion_smooth = get_optim_scheduler(search_model.get_weights(), config)
   a_optimizer = torch.optim.Adam(search_model.get_alphas(), lr=xargs.arch_learning_rate, betas=(0.5, 0.999), weight_decay=xargs.arch_weight_decay)
   logger.log('w-optimizer : {:}'.format(w_optimizer))
   logger.log('w-scheduler : {:}'.format(w_scheduler))
@@ -187,38 +183,42 @@ def main(xargs):
     start_epoch, valid_accuracies, genotypes = 0, {'best': -1}, {-1: search_model.genotype()}
 
   # start training
-  start_time, search_time, epoch_time, total_epoch, genos = time.time(), AverageMeter(), AverageMeter(), config.epochs + config.warmup, xargs.init_genos
-  for epoch in range(start_epoch, total_epoch+5):
+  from genotypes import GENOTYPES
+  start_time, search_time, epoch_time, total_epoch, genos = time.time(), AverageMeter(), AverageMeter(), config.epochs + config.warmup, GENOTYPES[xargs.init_genos]
+  for epoch in range(start_epoch, total_epoch):
     w_scheduler.update(epoch, 0.0)
-    disturb_rate = 0.01
     need_time = 'Time Left: {:}'.format( convert_secs2time(epoch_time.val * (total_epoch-epoch), True) )
     epoch_str = '{:03d}-{:03d}'.format(epoch, total_epoch)
     search_model.set_tau( xargs.tau_max - (xargs.tau_max-xargs.tau_min) * epoch / (total_epoch-1) )
-    logger.log('\n[The {:}-th epoch] {:}, tau={:}, LR={:}, dr={:}'.format(epoch_str, need_time, search_model.get_tau(), min(w_scheduler.get_lr()), disturb_rate))
+    disturb_rate = xargs.disturb_rate_min + (xargs.disturb_rate_max - xargs.disturb_rate_min) * (1 + math.cos(math.pi * epoch / (total_epoch-1))) / 2
+    logger.log('\n[The {:}-th epoch] {:}, LR={:}, tau={:}, dr={:}'.format(epoch_str, need_time, min(w_scheduler.get_lr()), search_model.get_tau(), disturb_rate))
 
-    if epoch % 10 in [0]:
+    period = config.t_epochs + config.s_epochs
+    if epoch % period in [0]:
       search_model.set_genos(genos)
       search_model.reset_parameters()
       logger.log('[{:}] set new genos and reset some parameters.'.format(epoch_str))
-    if epoch % 10 in [0, 1, 2, 3, 4]:
+    if epoch % period in range(config.t_epochs):
       # train
-      train_loss, train_top1, train_top5 = train_func(train_loader, network, criterion, w_scheduler, w_optimizer, epoch_str, xargs.print_freq, logger)
+      train_loss, train_top1, train_top5 = train_func(train_loader, network, criterion if criterion_smooth is None else criterion_smooth, w_scheduler, w_optimizer, epoch_str, xargs.print_freq, logger)
       search_time.update(time.time() - start_time)
       logger.log('[{:}] training : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%, time-cost={:.1f} s'.format(epoch_str, train_loss, train_top1, train_top5, search_time.sum))
       # valid
       with torch.no_grad():
         test_loss, test_top1, test_top5 = test_func(test_loader, network, criterion, xargs.print_freq, logger)
       logger.log('[{:}] evaluate : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%'.format(epoch_str, test_loss , test_top1 , test_top5 ))
-    if epoch % 10 in [5]:
+    if epoch % period in [config.t_epochs]:
       genos = disturb(genos, disturb_rate)
+      search_model.set_genos(genos)
+      search_model.reset_parameters()
       logger.log('[{:}] disturb the genotypes as :\n{:}'.format(epoch_str, genos))
-    if epoch % 10 in [5, 6, 7, 8, 9]:
+    if epoch % period in range(config.t_epochs, period):
       #search
       search_w_loss, search_w_top1, search_w_top5, valid_a_loss , valid_a_top1 , valid_a_top5 = search_func(search_loader, network, criterion, w_scheduler, w_optimizer, a_optimizer, epoch_str, xargs.print_freq, logger)
       search_time.update(time.time() - start_time)
       logger.log('[{:}] searching : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%, time-cost={:.1f} s'.format(epoch_str, search_w_loss, search_w_top1, search_w_top5, search_time.sum))
       logger.log('[{:}] evaluate  : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%'.format(epoch_str, valid_a_loss , valid_a_top1 , valid_a_top5 ))
-    if epoch % 10 in [9]:
+    if epoch % period in [period-1]:
       genos = search_model.get_genos()
       logger.log('[{:}] get new genotypes :\n{:}'.format(epoch_str, genos))
 
@@ -262,7 +262,7 @@ def main(xargs):
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser("DDNAS")
-  parser.add_argument('--data_path',          type=str,   help='Path to dataset')
+  parser.add_argument('--data_path',          type=str,   help='Path to dataset.')
   parser.add_argument('--dataset',            type=str,   choices=['cifar10', 'cifar100', 'imagenet'], help='Choose between cifar10/100 and imagenet.')
   parser.add_argument('--cutout',             type=int,   help='Cutout length.')
   # channels and number-of-cells
@@ -274,15 +274,17 @@ if __name__ == '__main__':
   parser.add_argument('--config_path',        type=str,   help='The path of the configuration.')
   parser.add_argument('--model_config',       type=str,   help='The path of the model configuration. When this arg is set, it will cover max_nodes / channels / num_cells.')
   # architecture leraning rate
-  parser.add_argument('--arch_learning_rate', type=float, default=3e-4, help='learning rate for arch encoding')
-  parser.add_argument('--arch_weight_decay',  type=float, default=1e-3, help='weight decay for arch encoding')
-  parser.add_argument('--tau_min',            type=float,               help='The minimum tau for Gumbel')
-  parser.add_argument('--tau_max',            type=float,               help='The maximum tau for Gumbel')
+  parser.add_argument('--arch_learning_rate', type=float, default=3e-4, help='Learning rate for arch encoding.')
+  parser.add_argument('--arch_weight_decay',  type=float, default=1e-3, help='Weight decay for arch encoding.')
+  parser.add_argument('--tau_min',            type=float,               help='The minimum tau for Gumbel.')
+  parser.add_argument('--tau_max',            type=float,               help='The maximum tau for Gumbel.')
+  parser.add_argument('--disturb_rate_min',   type=float,               help='The minimum disturb rate.')
+  parser.add_argument('--disturb_rate_max',   type=float,               help='The maximum disturb rate.')
   # log
-  parser.add_argument('--workers',            type=int,   default=2,    help='number of data loading workers (default: 2)')
+  parser.add_argument('--workers',            type=int,   default=2,    help='Number of data loading workers (default: 2).')
   parser.add_argument('--save_dir',           type=str,   help='Folder to save checkpoints and log.')
-  parser.add_argument('--print_freq',         type=int,   help='print frequency (default: 200)')
-  parser.add_argument('--rand_seed',          type=int,   help='manual seed')
+  parser.add_argument('--print_freq',         type=int,   help='Print frequency (default: 200).')
+  parser.add_argument('--rand_seed',          type=int,   help='Manual seed.')
   parser.add_argument('--init_genos',         type=str,   help='Initial genotypes.')
   args = parser.parse_args()
   if args.rand_seed is None or args.rand_seed < 0: args.rand_seed = random.randint(1, 100000)
