@@ -22,7 +22,7 @@ def search_func(xloader, network, criterion, scheduler, w_optimizer, a_optimizer
     
     # update the weights
     w_optimizer.zero_grad()
-    _, logits = network(base_inputs)
+    logits, _ = network(base_inputs)
     base_loss = criterion(logits, base_targets)
     base_loss.backward()
     torch.nn.utils.clip_grad_norm_(network.parameters(), 5)
@@ -58,7 +58,7 @@ def search_func(xloader, network, criterion, scheduler, w_optimizer, a_optimizer
   return base_losses.avg, base_top1.avg, base_top5.avg, arch_losses.avg, arch_top1.avg, arch_top5.avg
 
 
-def train_func(xloader, network, criterion, scheduler, optimizer, auxiliary, epoch_str, print_freq, logger):
+def train_func(xloader, network, criterion, auxiliary, scheduler, optimizer, epoch_str, print_freq, logger):
   data_time, batch_time = AverageMeter(), AverageMeter()
   losses, top1, top5 = AverageMeter(), AverageMeter(), AverageMeter()
   network.train()
@@ -73,9 +73,9 @@ def train_func(xloader, network, criterion, scheduler, optimizer, auxiliary, epo
     optimizer.zero_grad()
     logits, logits_aux = network(inputs)
     loss = criterion(logits, targets)
-    if auxiliary:
+    if logits_aux is not None:
       loss_aux = criterion(logits_aux, targets)
-      loss = loss + 0.4*loss_aux
+      loss = loss + auxiliary*loss_aux
     loss.backward()
     torch.nn.utils.clip_grad_norm_(network.parameters(), 5)
     optimizer.step()
@@ -144,12 +144,12 @@ def main(xargs):
   logger.log('||||||| {:10s} ||||||| Config={:}'.format(xargs.dataset, config))
 
   search_space = SearchSpaceNames[xargs.search_space_name]
-  model_config = load_config(xargs.model_config, {'num_classes': class_num, 'space' : search_space, 'affine' : False, 'auxiliary': True, 'track_running_stats': True}, None)
+  model_config = load_config(xargs.model_config, {'num_classes': class_num, 'space' : search_space, 'affine' : False, 'track_running_stats': True}, None)
   if xargs.dataset == 'cifar10' or xargs.dataset == 'cifar100':
     from models import NASNetworkCIFAR as NASNetwork
   else:
     from models import NASNetworkImageNet as NASNetwork
-  search_model = NASNetwork(model_config.C, model_config.N, model_config.steps, model_config.multiplier, model_config.stem_multiplier, model_config.num_classes, model_config.keep_prob, model_config.drop_path_keep_prob, model_config.space, model_config.affine, model_config.track_running_stats, model_config.auxiliary)
+  search_model = NASNetwork(model_config.C, model_config.N, model_config.steps, model_config.multiplier, model_config.stem_multiplier, model_config.num_classes, model_config.keep_prob, model_config.drop_path_keep_prob, model_config.space, model_config.affine, model_config.track_running_stats, config.auxiliary)
   logger.log('search-model :\n{:}'.format(search_model))
   logger.log('model-config : {:}'.format(model_config))
   
@@ -202,7 +202,7 @@ def main(xargs):
       logger.log('[{:}] set new genos and reset some parameters.'.format(epoch_str))
     if epoch % period in range(config.t_epochs):
       # train
-      train_loss, train_top1, train_top5 = train_func(train_loader, network, criterion if criterion_smooth is None else criterion_smooth, w_scheduler, w_optimizer, search_model.auxiliary, epoch_str, xargs.print_freq, logger)
+      train_loss, train_top1, train_top5 = train_func(train_loader, network, criterion if criterion_smooth is None else criterion_smooth, config.auxiliary, w_scheduler, w_optimizer, epoch_str, xargs.print_freq, logger)
       search_time.update(time.time() - start_time)
       logger.log('[{:}] training : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%, time-cost={:.1f} s'.format(epoch_str, train_loss, train_top1, train_top5, search_time.sum))
       # valid
