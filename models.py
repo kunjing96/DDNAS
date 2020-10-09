@@ -63,8 +63,8 @@ class NASCell(nn.Module):
     def _parse(weights):
       geno = []
       for i in range(self._steps):
-        op0, pre0 = geno[i][0][0], geno[i][0][1]
-        op1, pre1 = geno[i][1][0], geno[i][1][1]
+        op0, pre0 = self.geno[i][0][0], self.geno[i][0][1]
+        op1, pre1 = self.geno[i][1][0], self.geno[i][1][1]
         if pre0 == -1 or pre1 == -1:
           pres = list(range(2+i))
           if pre0 != -1: pres.remove(pre0)
@@ -95,10 +95,11 @@ class NASCell(nn.Module):
     return geno
 
   def reset_parameters(self):
-    self.arch_parameters = 1e-3*nn.init.normal_(self.arch_parameters)
+    with torch.no_grad():
+      self.arch_parameters.normal_(mean=0, std=1).mul_(1e-3)
     for i in range(self._steps):
-      op0, pre0 = geno[i][0][0], geno[i][0][1]
-      op1, pre1 = geno[i][1][0], geno[i][1][1]
+      op0, pre0 = self.geno[i][0][0], self.geno[i][0][1]
+      op1, pre1 = self.geno[i][1][0], self.geno[i][1][1]
       if pre0 == -1 or pre1 == -1:
         pres = list(range(2+i))
         if pre0 != -1: pres.remove(pre0)

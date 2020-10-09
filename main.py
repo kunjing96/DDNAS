@@ -1,4 +1,4 @@
-import sys, time, random, argparse
+import sys, time, math, random, argparse
 from copy import deepcopy
 import torch
 from data import get_datasets, get_nas_search_loaders
@@ -58,7 +58,7 @@ def search_func(xloader, network, criterion, scheduler, w_optimizer, a_optimizer
   return base_losses.avg, base_top1.avg, base_top5.avg, arch_losses.avg, arch_top1.avg, arch_top5.avg
 
 
-def train_func(xloader, network, criterion, scheduler, optimizer, epoch_str, print_freq, logger):
+def train_func(xloader, network, criterion, scheduler, optimizer, auxiliary, epoch_str, print_freq, logger):
   data_time, batch_time = AverageMeter(), AverageMeter()
   losses, top1, top5 = AverageMeter(), AverageMeter(), AverageMeter()
   network.train()
@@ -73,7 +73,7 @@ def train_func(xloader, network, criterion, scheduler, optimizer, epoch_str, pri
     optimizer.zero_grad()
     logits, logits_aux = network(inputs)
     loss = criterion(logits, targets)
-    if network.auxiliary:
+    if auxiliary:
       loss_aux = criterion(logits_aux, targets)
       loss = loss + 0.4*loss_aux
     loss.backward()
@@ -144,7 +144,7 @@ def main(xargs):
   logger.log('||||||| {:10s} ||||||| Config={:}'.format(xargs.dataset, config))
 
   search_space = SearchSpaceNames[xargs.search_space_name]
-  model_config = load_config(xargs.model_config, {"num_classes": class_num, "space" : search_space, "affine" : False, "auxiliary": True, "track_running_stats": True}, None)
+  model_config = load_config(xargs.model_config, {'num_classes': class_num, 'space' : search_space, 'affine' : False, 'auxiliary': True, 'track_running_stats': True}, None)
   if xargs.dataset == 'cifar10' or xargs.dataset == 'cifar100':
     from models import NASNetworkCIFAR as NASNetwork
   else:
@@ -158,6 +158,7 @@ def main(xargs):
   logger.log('w-optimizer : {:}'.format(w_optimizer))
   logger.log('w-scheduler : {:}'.format(w_scheduler))
   logger.log('criterion   : {:}'.format(criterion))
+  logger.log('criterion_smooth : {:}'.format(criterion_smooth))
   logger.log('a-optimizer : {:}'.format(a_optimizer))
   flop, param  = get_model_infos(search_model, xshape)
   logger.log('FLOP = {:.2f} M, Params = {:.2f} MB'.format(flop, param))
@@ -165,6 +166,7 @@ def main(xargs):
 
   last_info, model_base_path, model_best_path = logger.path('info'), logger.path('model'), logger.path('best')
   network, criterion = torch.nn.DataParallel(search_model).cuda(), criterion.cuda()
+  if criterion_smooth is not None: criterion_smooth = criterion_smooth.cuda()
 
   if last_info.exists(): # automatically resume from previous checkpoint
     logger.log("=> loading checkpoint of the last-info '{:}' start".format(last_info))
@@ -180,7 +182,7 @@ def main(xargs):
     logger.log("=> loading checkpoint of the last-info '{:}' start with {:}-th epoch.".format(last_info, start_epoch))
   else:
     logger.log("=> do not find the last-info file : {:}".format(last_info))
-    start_epoch, valid_accuracies, genotypes = 0, {'best': -1}, {-1: search_model.genotype()}
+    start_epoch, valid_accuracies, genotypes = 0, {'best': -1}, {-1: search_model.get_genos()}
 
   # start training
   from genotypes import GENOTYPES
@@ -200,7 +202,7 @@ def main(xargs):
       logger.log('[{:}] set new genos and reset some parameters.'.format(epoch_str))
     if epoch % period in range(config.t_epochs):
       # train
-      train_loss, train_top1, train_top5 = train_func(train_loader, network, criterion if criterion_smooth is None else criterion_smooth, w_scheduler, w_optimizer, epoch_str, xargs.print_freq, logger)
+      train_loss, train_top1, train_top5 = train_func(train_loader, network, criterion if criterion_smooth is None else criterion_smooth, w_scheduler, w_optimizer, search_model.auxiliary, epoch_str, xargs.print_freq, logger)
       search_time.update(time.time() - start_time)
       logger.log('[{:}] training : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%, time-cost={:.1f} s'.format(epoch_str, train_loss, train_top1, train_top5, search_time.sum))
       # valid
