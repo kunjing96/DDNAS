@@ -149,7 +149,7 @@ def main(xargs):
     from models import NASNetworkCIFAR as NASNetwork
   else:
     from models import NASNetworkImageNet as NASNetwork
-  search_model = NASNetwork(model_config.C, model_config.N, model_config.steps, model_config.multiplier, model_config.stem_multiplier, model_config.num_classes, model_config.keep_prob, model_config.drop_path_keep_prob, model_config.space, model_config.affine, model_config.track_running_stats, config.auxiliary)
+  search_model = NASNetwork(model_config.C, model_config.N, model_config.steps, model_config.multiplier, model_config.stem_multiplier, model_config.num_classes, model_config.drop_prob, model_config.drop_path_prob, model_config.space, model_config.affine, model_config.track_running_stats, config.auxiliary)
   logger.log('search-model :\n{:}'.format(search_model))
   logger.log('model-config : {:}'.format(model_config))
   
@@ -186,21 +186,38 @@ def main(xargs):
 
   # start training
   from genotypes import GENOTYPES
-  start_time, search_time, epoch_time, total_epoch, genos = time.time(), AverageMeter(), AverageMeter(), config.epochs + config.warmup, GENOTYPES[xargs.init_genos]
+  start_time, search_time, epoch_time, total_epoch, pretrain, period, genos = time.time(), AverageMeter(), AverageMeter(), config.epochs + config.warmup, config.pretrain, config.t_epochs + config.s_epochs, GENOTYPES[xargs.init_genos]
   for epoch in range(start_epoch, total_epoch):
-    w_scheduler.update(epoch, 0.0)
+    w_scheduler.update(epoch if epoch<pretrain else epoch-pretrain, 0.0)
     need_time = 'Time Left: {:}'.format( convert_secs2time(epoch_time.val * (total_epoch-epoch), True) )
     epoch_str = '{:03d}-{:03d}'.format(epoch, total_epoch)
-    search_model.set_tau( xargs.tau_max - (xargs.tau_max-xargs.tau_min) * epoch / (total_epoch-1) )
-    disturb_rate = xargs.disturb_rate_min + (xargs.disturb_rate_max - xargs.disturb_rate_min) * (1 + math.cos(math.pi * epoch / (total_epoch-1))) / 2
-    logger.log('\n[The {:}-th epoch] {:}, LR={:}, tau={:}, dr={:}'.format(epoch_str, need_time, min(w_scheduler.get_lr()), search_model.get_tau(), disturb_rate))
+    if epoch < pretrain:
+      logger.log('\n[The {:}-th epoch] {:}, LR={:}'.format(epoch_str, need_time, min(w_scheduler.get_lr())))
+    else:
+      if (epoch-pretrain) % period in range(config.s_epochs):
+        search_model.set_tau( xargs.tau_max - (xargs.tau_max-xargs.tau_min) * ((epoch-pretrain) % period) / (config.s_epochs-1) )
+      disturb_rate = xargs.disturb_rate_min + (xargs.disturb_rate_max - xargs.disturb_rate_min) * (1 + math.cos(math.pi * (epoch-pretrain) / (total_epoch-pretrain-1))) / 2
+      logger.log('\n[The {:}-th epoch] {:}, LR={:}, tau={:}, dr={:}'.format(epoch_str, need_time, min(w_scheduler.get_lr()), search_model.get_tau(), disturb_rate))
 
-    period = config.t_epochs + config.s_epochs
     if epoch % period in [0]:
       search_model.set_genos(genos)
       search_model.reset_parameters()
       logger.log('[{:}] set new genos and reset some parameters.'.format(epoch_str))
-    if epoch % period in range(config.t_epochs):
+    if epoch >= pretrain and (epoch-pretrain) % period in [0]:
+      genos = disturb(genos, disturb_rate)
+      search_model.set_genos(genos)
+      search_model.reset_parameters()
+      logger.log('[{:}] disturb the genotypes as :\n{:}'.format(epoch_str, genos))
+    if epoch >= pretrain and (epoch-pretrain) % period in range(config.s_epochs):
+      #search
+      search_w_loss, search_w_top1, search_w_top5, valid_a_loss , valid_a_top1 , valid_a_top5 = search_func(search_loader, network, criterion, w_scheduler, w_optimizer, a_optimizer, epoch_str, xargs.print_freq, logger)
+      search_time.update(time.time() - start_time)
+      logger.log('[{:}] searching : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%, time-cost={:.1f} s'.format(epoch_str, search_w_loss, search_w_top1, search_w_top5, search_time.sum))
+      logger.log('[{:}] evaluate  : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%'.format(epoch_str, valid_a_loss , valid_a_top1 , valid_a_top5 ))
+    if epoch >= pretrain and (epoch-pretrain) % period in [config.s_epochs-1]:
+      genos = search_model.get_genos()
+      logger.log('[{:}] get new genotypes :\n{:}'.format(epoch_str, genos))
+    if epoch < pretrain or (epoch >= pretrain and (epoch-pretrain) % period in range(config.s_epochs, period)):
       # train
       train_loss, train_top1, train_top5 = train_func(train_loader, network, criterion if criterion_smooth is None else criterion_smooth, config.auxiliary, w_scheduler, w_optimizer, epoch_str, xargs.print_freq, logger)
       search_time.update(time.time() - start_time)
@@ -209,20 +226,6 @@ def main(xargs):
       with torch.no_grad():
         test_loss, test_top1, test_top5 = test_func(test_loader, network, criterion, xargs.print_freq, logger)
       logger.log('[{:}] evaluate : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%'.format(epoch_str, test_loss , test_top1 , test_top5 ))
-    if epoch % period in [config.t_epochs]:
-      genos = disturb(genos, disturb_rate)
-      search_model.set_genos(genos)
-      search_model.reset_parameters()
-      logger.log('[{:}] disturb the genotypes as :\n{:}'.format(epoch_str, genos))
-    if epoch % period in range(config.t_epochs, period):
-      #search
-      search_w_loss, search_w_top1, search_w_top5, valid_a_loss , valid_a_top1 , valid_a_top5 = search_func(search_loader, network, criterion, w_scheduler, w_optimizer, a_optimizer, epoch_str, xargs.print_freq, logger)
-      search_time.update(time.time() - start_time)
-      logger.log('[{:}] searching : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%, time-cost={:.1f} s'.format(epoch_str, search_w_loss, search_w_top1, search_w_top5, search_time.sum))
-      logger.log('[{:}] evaluate  : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%'.format(epoch_str, valid_a_loss , valid_a_top1 , valid_a_top5 ))
-    if epoch % period in [period-1]:
-      genos = search_model.get_genos()
-      logger.log('[{:}] get new genotypes :\n{:}'.format(epoch_str, genos))
 
     genotypes[epoch] = search_model.get_genos()
 
