@@ -65,7 +65,7 @@ class NASCell(nn.Module):
       for i in range(self._steps):
         op0, pre0 = self.geno[i][0][0], self.geno[i][0][1]
         op1, pre1 = self.geno[i][1][0], self.geno[i][1][1]
-        if pre0 == -1 or pre1 == -1:
+        if (op0 is None and pre0 == -1) or (op1 is None and pre1 == -1):
           pres = list(range(2+i))
           if pre0 != -1: pres.remove(pre0)
           if pre1 != -1: pres.remove(pre1)
@@ -77,7 +77,7 @@ class NASCell(nn.Module):
               if op_name == 'none': continue
               edges.append( (op_name, j, ws[k]) )
           edges = sorted(edges, key=lambda x: -x[-1])
-          if pre0 == -1 and pre1 == -1:
+          if (op0 is None and pre0 == -1) and (op1 is None and pre1 == -1):
             selected_edge_0 = (edges[0][0], edges[0][1])
             for edge in edges[1:]:
               if edge[1] != edges[0][1]:
@@ -86,6 +86,7 @@ class NASCell(nn.Module):
           else:
             if   pre0 != -1: selected_edge_0, selected_edge_1 = (op0, pre0), (edges[0][0], edges[0][1])
             elif pre1 != -1: selected_edge_0, selected_edge_1 = (edges[0][0], edges[0][1]), (op1, pre1)
+            else: raise ValueError('Neither pre0 nor pre1 is -1'.format(config.optim))
         else: selected_edge_0, selected_edge_1 = (op0, pre0), (op1, pre1)
         geno.append( (selected_edge_0, selected_edge_1) )
       return geno
@@ -93,6 +94,32 @@ class NASCell(nn.Module):
     with torch.no_grad():
       geno = _parse(torch.softmax(self.arch_parameters, dim=-1).cpu().numpy())
     return geno
+
+  def birth(self, birth_rate=1.0):
+    new_geno = []
+    for i in range(len(self.geno)):
+      l, r = self.geno[i][0], self.geno[i][1]
+      if l[0] is not None and l[1] != -1 and np.random.random() < birth_rate:
+        l = (None, -1)
+      if r[0] is not None and r[1] != -1 and np.random.random() < birth_rate:
+        r = (None, -1)
+      new_geno.append((l, r))
+    self.geno = new_geno
+
+  def prune(self, prune_rate=1.0):
+    new_geno = self.get_geno()
+    assert len(self.geno) ==  len(new_geno)
+    pruned_geno = []
+    for i in range(len(self.geno)):
+      assert len(self.geno[i]) ==  len(new_geno[i]) == 2
+      new_l, new_r = new_geno[i][0] , new_geno[i][1]
+      l    , r     = self.geno[i][0], self.geno[i][1]
+      if l[0] is None and l[1] == -1 and np.random.random() < prune_rate:
+        l = new_l
+      if r[0] is None and r[1] == -1 and np.random.random() < prune_rate:
+        r = new_r
+      pruned_geno.append((l, r))
+    self.geno = pruned_geno
 
   def reset_parameters(self):
     with torch.no_grad():
@@ -197,6 +224,14 @@ class _NASNetwork(nn.Module):
 
   def get_genos(self):
     return [cell.get_geno() for cell in self.cells]
+
+  def birth(self, birth_rate=1.0):
+    for cell in self.cells:
+      cell.birth(birth_rate=birth_rate)
+
+  def prune(self, prune_rate=1.0):
+    for cell in self.cells:
+      cell.prune(prune_rate=prune_rate)
 
   def reset_parameters(self):
     for cell in self.cells:

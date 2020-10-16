@@ -48,7 +48,6 @@ def add_flops_counting_methods( model ):
   return model
 
 
-
 def compute_average_flops_cost(model):
   """
   A method that will be available after add_flops_counting_methods() is called on a desired net object.
