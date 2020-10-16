@@ -24,7 +24,6 @@ OMP_NUM_THREADS=4 python main.py \
 	--config_path  config/DDNAS-OPTS-CIFAR.config \
 	--model_config config/DDNAS-ARCHS-CIFAR.config \
 	--tau_max 10 --tau_min 0.1 --cutout ${cutout} \
-	--birth_rate_max 0.125 --birth_rate_min 0.0 \
 	--arch_learning_rate 0.0003 --arch_weight_decay 0.001 \
 	--workers 4 --print_freq 200 --rand_seed ${seed} \
 	--init_genos GDAS

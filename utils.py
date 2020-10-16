@@ -108,17 +108,17 @@ def get_optim_scheduler(parameters, config):
 
   if config.scheduler == 'cos':
     from optimizers import CosineAnnealingLR
-    T_max = getattr(config, 'T_max', , config.epochs-config.pretrain)
-    scheduler = CosineAnnealingLR(optim, config.warmup, config.epochs-config.pretrain, T_max, config.eta_min)
+    T_max = getattr(config, 'T_max', config.epochs)
+    scheduler = CosineAnnealingLR(optim, config.warmup, config.epochs, T_max, config.eta_min)
   elif config.scheduler == 'multistep':
     from optimizers import MultiStepLR
-    scheduler = MultiStepLR(optim, config.warmup, config.epochs-config.pretrain, config.milestones, config.gammas)
+    scheduler = MultiStepLR(optim, config.warmup, config.epochs, config.milestones, config.gammas)
   elif config.scheduler == 'exponential':
     from optimizers import ExponentialLR
-    scheduler = ExponentialLR(optim, config.warmup, config.epochs-config.pretrain, config.gamma)
+    scheduler = ExponentialLR(optim, config.warmup, config.epochs, config.gamma)
   elif config.scheduler == 'linear':
     from optimizers import LinearLR
-    scheduler = LinearLR(optim, config.warmup, config.epochs-config.pretrain, config.LR, config.LR_min)
+    scheduler = LinearLR(optim, config.warmup, config.epochs, config.LR, config.LR_min)
   else:
     raise ValueError('invalid scheduler : {:}'.format(config.scheduler))
 
@@ -206,10 +206,9 @@ def copy_checkpoint(src, dst, logger):
   if hasattr(logger, 'log'): logger.log('copy the file from {:} into {:}'.format(src, dst))
 
 
-def compute_num_unpruned_edges(model):
+def compute_num_unpruned_edges(genos):
   ret = 0
-  for cell in model.cells:
-    geno = cell.geno
+  for geno in genos:
     for step in geno:
       l, r = step[0], step[1]
       if l[0] is None and l[1] == -1:

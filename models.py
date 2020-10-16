@@ -138,10 +138,13 @@ class NASCell(nn.Module):
   def get_alpha(self):
     return self.arch_parameters
 
-  def show_alpha(self):
+  def show_alpha(self, softmax=True):
     with torch.no_grad():
-      str = '{:}'.format( nn.functional.softmax(self.arch_parameters, dim=-1).cpu() )
-    return str
+      if softmax:
+        alpha = nn.functional.softmax(self.arch_parameters, dim=-1).detach().cpu().numpy()
+      else:
+        alpha = self.arch_parameters.detach().cpu().numpy()
+    return alpha
 
   def forward(self, s0, s1, tau, drop_path_prob):
     def get_gumbel_prob(xins, tau):
@@ -222,6 +225,10 @@ class _NASNetwork(nn.Module):
     for (cell, geno) in zip(self.cells, genos):
       cell.set_geno(geno)
 
+  @property
+  def genos(self):
+    return [cell.geno for cell in self.cells]
+
   def get_genos(self):
     return [cell.get_geno() for cell in self.cells]
 
@@ -246,13 +253,8 @@ class _NASNetwork(nn.Module):
   def get_alphas(self):
     return [cell.get_alpha() for cell in self.cells]
 
-  def show_alphas(self):
-    str = ''
-    for i, cell in enumerate(self.cells):
-      str += '\n' if i != 0 else ''
-      str += 'cell{:}-arch-parameters :\n'
-      str += cell.show_alpha()
-    return str
+  def show_alphas(self, softmax=True):
+    return [cell.show_alpha(softmax=softmax) for cell in self.cells]
 
   def get_message(self):
     string = self.extra_repr()

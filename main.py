@@ -7,7 +7,48 @@ from flop_benchmark import get_model_infos
 from operations import SearchSpaceNames
 
 
-def search_func(xloader, network, criterion, scheduler, w_optimizer, a_optimizer, epoch_str, print_freq, logger):
+def search_func(xloader, network, criterion, auxiliary, scheduler, w_optimizer, a_optimizer, epoch_str, print_freq, logger):
+  data_time, batch_time = AverageMeter(), AverageMeter()
+  losses, top1, top5 = AverageMeter(), AverageMeter(), AverageMeter()
+  network.train()
+  end = time.time()
+  for step, (inputs, targets) in enumerate(xloader):
+    scheduler.update(None, 1.0 * step / len(xloader))
+    targets = targets.cuda(non_blocking=True)
+    # measure data loading time
+    data_time.update(time.time() - end)
+    
+    # update the weights and the architecture-weight
+    w_optimizer.zero_grad()
+    a_optimizer.zero_grad()
+    logits, logits_aux = network(inputs)
+    loss = criterion(logits, targets)
+    if logits_aux is not None:
+      loss_aux = criterion(logits_aux, targets)
+      loss = loss + auxiliary*loss_aux
+    loss.backward()
+    torch.nn.utils.clip_grad_norm_(network.parameters(), 5)
+    w_optimizer.step()
+    a_optimizer.step()
+    # record
+    prec1, prec5 = obtain_accuracy(logits.data, targets.data, topk=(1, 5))
+    losses.update(loss.item(),  inputs.size(0))
+    top1.update  (prec1.item(), inputs.size(0))
+    top5.update  (prec5.item(), inputs.size(0))
+
+    # measure elapsed time
+    batch_time.update(time.time() - end)
+    end = time.time()
+
+    if step % print_freq == 0 or step + 1 == len(xloader):
+      Sstr = '*SEARCH* ' + time_string() + ' [{:}][{:03d}/{:03d}]'.format(epoch_str, step, len(xloader))
+      Tstr = 'Time {batch_time.val:.2f} ({batch_time.avg:.2f}) Data {data_time.val:.2f} ({data_time.avg:.2f})'.format(batch_time=batch_time, data_time=data_time)
+      Wstr = 'Base [Loss {loss.val:.3f} ({loss.avg:.3f})  Prec@1 {top1.val:.2f} ({top1.avg:.2f}) Prec@5 {top5.val:.2f} ({top5.avg:.2f})]'.format(loss=losses, top1=top1, top5=top5)
+      logger.log(Sstr + ' ' + Tstr + ' ' + Wstr)
+  return losses.avg, top1.avg, top5.avg
+
+
+'''def search_func(xloader, network, criterion, scheduler, w_optimizer, a_optimizer, epoch_str, print_freq, logger):
   data_time, batch_time = AverageMeter(), AverageMeter()
   base_losses, base_top1, base_top5 = AverageMeter(), AverageMeter(), AverageMeter()
   arch_losses, arch_top1, arch_top5 = AverageMeter(), AverageMeter(), AverageMeter()
@@ -55,7 +96,7 @@ def search_func(xloader, network, criterion, scheduler, w_optimizer, a_optimizer
       Wstr = 'Base [Loss {loss.val:.3f} ({loss.avg:.3f})  Prec@1 {top1.val:.2f} ({top1.avg:.2f}) Prec@5 {top5.val:.2f} ({top5.avg:.2f})]'.format(loss=base_losses, top1=base_top1, top5=base_top5)
       Astr = 'Arch [Loss {loss.val:.3f} ({loss.avg:.3f})  Prec@1 {top1.val:.2f} ({top1.avg:.2f}) Prec@5 {top5.val:.2f} ({top5.avg:.2f})]'.format(loss=arch_losses, top1=arch_top1, top5=arch_top5)
       logger.log(Sstr + ' ' + Tstr + ' ' + Wstr + ' ' + Astr)
-  return base_losses.avg, base_top1.avg, base_top5.avg, arch_losses.avg, arch_top1.avg, arch_top5.avg
+  return base_losses.avg, base_top1.avg, base_top5.avg, arch_losses.avg, arch_top1.avg, arch_top5.avg'''
 
 
 def train_func(xloader, network, criterion, auxiliary, scheduler, optimizer, epoch_str, print_freq, logger):
@@ -174,6 +215,9 @@ def main(xargs):
     start_epoch = last_info['epoch']
     checkpoint  = torch.load(last_info['last_checkpoint'])
     genotypes   = checkpoint['genotypes']
+    pruned_genotypes = checkpoint['pruned_genotypes']
+    alphas      = checkpoint['alphas']
+    alpha_probs = checkpoint['alpha_probs']
     valid_accuracies = checkpoint['valid_accuracies']
     search_model.load_state_dict( checkpoint['search_model'] )
     w_optimizer.load_state_dict ( checkpoint['w_optimizer'] )
@@ -182,7 +226,7 @@ def main(xargs):
     logger.log("=> loading checkpoint of the last-info '{:}' start with {:}-th epoch.".format(last_info, start_epoch))
   else:
     logger.log("=> do not find the last-info file : {:}".format(last_info))
-    start_epoch, valid_accuracies, genotypes = 0, {'best': -1}, {-1: search_model.get_genos()}
+    start_epoch, valid_accuracies, genotypes, pruned_genotypes, alphas, alpha_probs = 0, {'best': -1}, {-1: search_model.genos}, {-1: search_model.get_genos()}, {-1: search_model.show_alphas(softmax=False)}, {-1: search_model.show_alphas(softmax=True)}
 
   # start training
   from genotypes import GENOTYPES
@@ -197,7 +241,7 @@ def main(xargs):
       # set initial genos
       if epoch == 0:
         search_model.set_genos(genos)
-        logger.log('[{:}] set new genos {:}.'.format(epoch_str, genos))
+        logger.log('[{:}] set new genos {:}.'.format(epoch_str, xargs.init_genos))
 
       # train
       train_loss, train_top1, train_top5 = train_func(train_loader, network, criterion if criterion_smooth is None else criterion_smooth, config.auxiliary, w_scheduler, w_optimizer, epoch_str, xargs.print_freq, logger)
@@ -216,14 +260,14 @@ def main(xargs):
       # update birth rate and bear edges
       birth_rate = ( math.e**math.sqrt(1-epoch/(total_epoch-warmup)/2) ) * gamma * (1 + math.cos(math.pi * (epoch) / ((total_epoch-warmup)-1))) / 2
       search_model.birth(birth_rate)
-      num_unpruned_edges = compute_num_unpruned_edges(search_model)
+      num_unpruned_edges = compute_num_unpruned_edges(search_model.genos)
       logger.log('[{:}] birth_rate={:}, num_unpruned_edges={:}.'.format(epoch_str, birth_rate, num_unpruned_edges))
 
       #search
-      search_w_loss, search_w_top1, search_w_top5, valid_a_loss , valid_a_top1 , valid_a_top5 = search_func(search_loader, network, criterion, w_scheduler, w_optimizer, a_optimizer, epoch_str, xargs.print_freq, logger)
+      # search_w_loss, search_w_top1, search_w_top5, valid_a_loss , valid_a_top1 , valid_a_top5 = search_func(search_loader, network, criterion, w_scheduler, w_optimizer, a_optimizer, epoch_str, xargs.print_freq, logger)
+      search_loss, search_top1, search_top5 = search_func(train_loader, network, criterion if criterion_smooth is None else criterion_smooth, config.auxiliary, w_scheduler, w_optimizer, a_optimizer, epoch_str, xargs.print_freq, logger)
       search_time.update(time.time() - start_time)
-      logger.log('[{:}] searching : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%, time-cost={:.1f} s.'.format(epoch_str, search_w_loss, search_w_top1, search_w_top5, search_time.sum))
-      logger.log('[{:}] evaluate  : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%.'.format(epoch_str, valid_a_loss , valid_a_top1 , valid_a_top5 ))
+      logger.log('[{:}] searching : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%, time-cost={:.1f} s.'.format(epoch_str, search_loss, search_top1, search_top5, search_time.sum))
 
       # valid
       with torch.no_grad():
@@ -233,16 +277,22 @@ def main(xargs):
       # update prune rate and prune edges
       prune_rate = ( math.e**( math.sqrt(num_unpruned_edges/total_edges) / (1-epoch/(total_epoch-warmup))**2 ) ) * gamma * (1 + math.sin(math.pi * (epoch-(total_epoch-warmup)/2) / ((total_epoch-warmup)-1))) / 2
       search_model.prune(prune_rate)
-      num_unpruned_edges = compute_num_unpruned_edges(search_model)
+      num_unpruned_edges = compute_num_unpruned_edges(search_model.genos)
       logger.log('[{:}] prune_rate={:}, num_unpruned_edges={:}.'.format(epoch_str, prune_rate, num_unpruned_edges))
 
-    genotypes[epoch] = search_model.get_genos()
+    genotypes[epoch]        = search_model.genos
+    pruned_genotypes[epoch] = search_model.get_genos()
+    alphas[epoch]           = search_model.show_alphas(softmax=False)
+    alpha_probs[epoch]      = search_model.show_alphas(softmax=True)
 
     # check the best accuracy
     valid_accuracies[epoch] = test_top1
     if test_top1 > valid_accuracies['best']:
       valid_accuracies['best'] = test_top1
-      genotypes['best']        = search_model.get_genos()
+      genotypes['best']        = search_model.genos
+      pruned_genotypes['best'] = search_model.get_genos()
+      alphas['best']           = search_model.show_alphas(softmax=False)
+      alpha_probs['best']      = search_model.show_alphas(softmax=True)
       find_best = True
     else: find_best = False
 
@@ -254,6 +304,9 @@ def main(xargs):
                 'w_scheduler' : w_scheduler.state_dict(),
                 'a_optimizer' : a_optimizer.state_dict(),
                 'genotypes'   : genotypes,
+                'pruned_genotypes' : pruned_genotypes,
+                'alphas'      : alphas,
+                'alpha_probs' : alpha_probs,
                 'valid_accuracies' : valid_accuracies},
                 model_base_path, logger)
     last_info = save_checkpoint({
@@ -270,7 +323,7 @@ def main(xargs):
 
   logger.log('\n' + '-'*100)
   # check the performance from the architecture dataset
-  logger.log('DDNAS : run {:} epochs, cost {:.1f} s, last-geno is {:}.'.format(total_epoch, search_time.sum, genotypes[total_epoch-1]))
+  logger.log('DDNAS : run {:} epochs, cost {:.1f} s, last-genos is {:}, last-pruned-genos is {:}.'.format(total_epoch, search_time.sum, genotypes[total_epoch-1], pruned_genotypes[total_epoch-1]))
   logger.close()
   
 
@@ -292,8 +345,6 @@ if __name__ == '__main__':
   parser.add_argument('--arch_weight_decay',  type=float, default=1e-3, help='Weight decay for arch encoding.')
   parser.add_argument('--tau_min',            type=float,               help='The minimum tau for Gumbel.')
   parser.add_argument('--tau_max',            type=float,               help='The maximum tau for Gumbel.')
-  parser.add_argument('--birth_rate_min',     type=float,               help='The minimum birth rate.')
-  parser.add_argument('--birth_rate_max',     type=float,               help='The maximum birth rate.')
   # log
   parser.add_argument('--workers',            type=int,   default=2,    help='Number of data loading workers (default: 2).')
   parser.add_argument('--save_dir',           type=str,   help='Folder to save checkpoints and log.')
