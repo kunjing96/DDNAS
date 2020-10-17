@@ -52,7 +52,6 @@ class _LRScheduler(object):
       param_group['lr'] = lr
 
 
-
 class CosineAnnealingLR(_LRScheduler):
 
   def __init__(self, optimizer, warmup_epochs, epochs, T_max, eta_min):
@@ -79,7 +78,6 @@ class CosineAnnealingLR(_LRScheduler):
         lr = (self.current_epoch / self.warmup_epochs + self.current_iter / self.warmup_epochs) * base_lr
       lrs.append( lr )
     return lrs
-
 
 
 class MultiStepLR(_LRScheduler):

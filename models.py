@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import numpy as np
 from copy import deepcopy
 from operations import OPS, AuxiliaryHeadCIFAR, AuxiliaryHeadImageNet, drop_path
 

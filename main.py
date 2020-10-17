@@ -254,11 +254,11 @@ def main(xargs):
       logger.log('[{:}] evaluate : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%.'.format(epoch_str, test_loss , test_top1 , test_top5 ))
     else:
       # update tau
-      search_model.set_tau( xargs.tau_max - (xargs.tau_max-xargs.tau_min) * (epoch-warmup) / ((total_epoch-warmup)-1) )
+      search_model.set_tau( xargs.tau_max - (xargs.tau_max-xargs.tau_min) * (epoch-warmup) / (total_epoch-warmup-1) )
       logger.log('[{:}] tau={:}.'.format(epoch_str, search_model.get_tau()))
 
       # update birth rate and bear edges
-      birth_rate = ( math.e**math.sqrt(1-epoch/(total_epoch-warmup)/2) ) * gamma * (1 + math.cos(math.pi * (epoch) / ((total_epoch-warmup)-1))) / 2
+      birth_rate = ( math.e**math.sqrt(1 - (epoch-warmup)/(total_epoch-warmup)) ) * gamma * (1 + math.cos(math.pi * (epoch-warmup) / (total_epoch-warmup-1))) / 2 if epoch != total_epoch - 1 else 0
       search_model.birth(birth_rate)
       num_unpruned_edges = compute_num_unpruned_edges(search_model.genos)
       logger.log('[{:}] birth_rate={:}, num_unpruned_edges={:}.'.format(epoch_str, birth_rate, num_unpruned_edges))
@@ -275,7 +275,7 @@ def main(xargs):
       logger.log('[{:}] evaluate : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%.'.format(epoch_str, test_loss , test_top1 , test_top5 ))
 
       # update prune rate and prune edges
-      prune_rate = ( math.e**( math.sqrt(num_unpruned_edges/total_edges) / (1-epoch/(total_epoch-warmup))**2 ) ) * gamma * (1 + math.sin(math.pi * (epoch-(total_epoch-warmup)/2) / ((total_epoch-warmup)-1))) / 2
+      prune_rate = ( math.e**( math.sqrt(num_unpruned_edges/total_edges) / (1-(epoch-warmup)/(total_epoch-warmup))**2 ) ) * gamma * (1 + math.sin(math.pi * (epoch-warmup) / (total_epoch-warmup-1))) / 2 if epoch != total_epoch - 1 else 1
       search_model.prune(prune_rate)
       num_unpruned_edges = compute_num_unpruned_edges(search_model.genos)
       logger.log('[{:}] prune_rate={:}, num_unpruned_edges={:}.'.format(epoch_str, prune_rate, num_unpruned_edges))
