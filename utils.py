@@ -109,16 +109,17 @@ def get_optim_scheduler(parameters, config):
   if config.scheduler == 'cos':
     from optimizers import CosineAnnealingLR
     T_max = getattr(config, 'T_max', config.epochs)
-    scheduler = CosineAnnealingLR(optim, config.warmup, config.epochs, T_max, config.eta_min)
+    scheduler = CosineAnnealingLR(optim, config.warmup, config.warmup+config.epochs, T_max, config.eta_min)
   elif config.scheduler == 'multistep':
     from optimizers import MultiStepLR
-    scheduler = MultiStepLR(optim, config.warmup, config.epochs, config.milestones, config.gammas)
+    scheduler = MultiStepLR(optim, config.warmup, config.warmup+config.epochs, config.milestones, config.gammas)
   elif config.scheduler == 'exponential':
     from optimizers import ExponentialLR
-    scheduler = ExponentialLR(optim, config.warmup, config.epochs, config.gamma)
+    scheduler = ExponentialLR(optim, config.warmup, config.warmup+config.epochs, config.gamma)
   elif config.scheduler == 'linear':
     from optimizers import LinearLR
-    scheduler = LinearLR(optim, config.warmup, config.epochs, config.LR, config.LR_min)
+    T_max = getattr(config, 'T_max', config.epochs)
+    scheduler = LinearLR(optim, config.warmup, config.warmup+config.epochs, T_max, config.LR, config.LR_min)
   else:
     raise ValueError('invalid scheduler : {:}'.format(config.scheduler))
 

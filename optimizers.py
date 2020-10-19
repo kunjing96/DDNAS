@@ -129,7 +129,8 @@ class ExponentialLR(_LRScheduler):
 
 class LinearLR(_LRScheduler):
 
-  def __init__(self, optimizer, warmup_epochs, epochs, max_LR, min_LR):
+  def __init__(self, optimizer, warmup_epochs, epochs, T_max, max_LR, min_LR):
+    self.T_max = T_max
     self.max_LR = max_LR
     self.min_LR = min_LR
     super(LinearLR, self).__init__(optimizer, warmup_epochs, epochs)
@@ -143,7 +144,7 @@ class LinearLR(_LRScheduler):
       if self.current_epoch >= self.warmup_epochs:
         last_epoch = self.current_epoch - self.warmup_epochs
         assert last_epoch >= 0, 'invalid last_epoch : {:}'.format(last_epoch)
-        ratio = (self.max_LR - self.min_LR) * last_epoch / self.max_epochs / self.max_LR
+        ratio = (self.max_LR - self.min_LR) * last_epoch / self.T_max / self.max_LR
         lr = base_lr * (1-ratio)
       else:
         lr = (self.current_epoch / self.warmup_epochs + self.current_iter / self.warmup_epochs) * base_lr

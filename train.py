@@ -201,7 +201,7 @@ def main(xargs):
   logger.log('criterion   : {:}'.format(criterion))
   logger.log('criterion_smooth : {:}'.format(criterion_smooth))
   logger.log('a-optimizer : {:}'.format(a_optimizer))
-  flop, param = get_model_infos(search_model, xshape)
+  flop, param  = get_model_infos(search_model, xshape)
   logger.log('FLOP = {:.2f} M, Params = {:.2f} MB'.format(flop, param))
   logger.log('search-space [{:} ops] : {:}'.format(len(search_space), search_space))
 
@@ -230,55 +230,28 @@ def main(xargs):
 
   # start training
   from genotypes import GENOTYPES
-  start_time, search_time, epoch_time, warmup, total_epoch, gamma, genos, total_edges = time.time(), AverageMeter(), AverageMeter(), config.warmup, config.warmup+config.epochs, config.gamma, GENOTYPES[xargs.init_genos], (model_config.N*3+2)*model_config.steps*2
+  start_time, search_time, epoch_time, warmup, total_epoch, gamma, genos, total_edges = time.time(), AverageMeter(), AverageMeter(), config.warmup, config.epochs + config.warmup, config.gamma, GENOTYPES[xargs.init_genos], (model_config.N*3+2)*model_config.steps*2
   for epoch in range(start_epoch, total_epoch):
     epoch_str = '{:03d}-{:03d}'.format(epoch, total_epoch)
     need_time = 'Time Left: {:}'.format( convert_secs2time(epoch_time.val * (total_epoch-epoch), True) )
     # update lr
     w_scheduler.update(epoch, 0.0)
     logger.log('\n[The {:}-th epoch] {:}, LR={:}'.format(epoch_str, need_time, min(w_scheduler.get_lr())))
-    if epoch < warmup:
-      # set initial genos
-      if epoch == 0:
-        search_model.set_genos(genos)
-        logger.log('[{:}] set new genos {:}.'.format(epoch_str, xargs.init_genos))
 
-      # train
-      train_loss, train_top1, train_top5 = train_func(train_loader, network, criterion if criterion_smooth is None else criterion_smooth, config.auxiliary, w_scheduler, w_optimizer, epoch_str, xargs.print_freq, logger)
-      search_time.update(time.time() - start_time)
-      logger.log('[{:}] training : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%, time-cost={:.1f} s.'.format(epoch_str, train_loss, train_top1, train_top5, search_time.sum))
+    # set initial genos
+    if epoch == 0:
+      search_model.set_genos(genos)
+      logger.log('[{:}] set new genos {:}.'.format(epoch_str, xargs.init_genos))
 
-      # valid
-      with torch.no_grad():
-        test_loss, test_top1, test_top5 = test_func(test_loader, network, criterion, xargs.print_freq, logger)
-      logger.log('[{:}] evaluate : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%.'.format(epoch_str, test_loss , test_top1 , test_top5 ))
-    else:
-      # update tau
-      search_model.set_tau( xargs.tau_max - (xargs.tau_max-xargs.tau_min) * (epoch-warmup) / (total_epoch-warmup-1) )
-      logger.log('[{:}] tau={:}.'.format(epoch_str, search_model.get_tau()))
+    # train
+    train_loss, train_top1, train_top5 = train_func(train_loader, network, criterion if criterion_smooth is None else criterion_smooth, config.auxiliary, w_scheduler, w_optimizer, epoch_str, xargs.print_freq, logger)
+    search_time.update(time.time() - start_time)
+    logger.log('[{:}] training : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%, time-cost={:.1f} s.'.format(epoch_str, train_loss, train_top1, train_top5, search_time.sum))
 
-      # update birth rate and bear edges
-      birth_rate = ( math.e**math.sqrt(1 - (epoch-warmup)/(total_epoch-warmup)) ) * gamma * (1 + math.cos(math.pi * (epoch-warmup) / (total_epoch-warmup-1))) / 2 if epoch != total_epoch - 1 else 0
-      search_model.birth(birth_rate)
-      num_unpruned_edges = compute_num_unpruned_edges(search_model.genos)
-      logger.log('[{:}] birth_rate={:}, num_unpruned_edges={:}.'.format(epoch_str, birth_rate, num_unpruned_edges))
-
-      #search
-      # search_w_loss, search_w_top1, search_w_top5, valid_a_loss , valid_a_top1 , valid_a_top5 = search_func(search_loader, network, criterion, w_scheduler, w_optimizer, a_optimizer, epoch_str, xargs.print_freq, logger)
-      search_loss, search_top1, search_top5 = search_func(train_loader, network, criterion if criterion_smooth is None else criterion_smooth, config.auxiliary, w_scheduler, w_optimizer, a_optimizer, epoch_str, xargs.print_freq, logger)
-      search_time.update(time.time() - start_time)
-      logger.log('[{:}] searching : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%, time-cost={:.1f} s.'.format(epoch_str, search_loss, search_top1, search_top5, search_time.sum))
-
-      # valid
-      with torch.no_grad():
-        test_loss, test_top1, test_top5 = test_func(test_loader, network, criterion, xargs.print_freq, logger)
-      logger.log('[{:}] evaluate : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%.'.format(epoch_str, test_loss , test_top1 , test_top5 ))
-
-      # update prune rate and prune edges
-      prune_rate = ( math.e**( math.sqrt(num_unpruned_edges/total_edges) / (1-(epoch-warmup)/(total_epoch-warmup))**2 ) ) * gamma * (1 + math.sin(math.pi * (epoch-warmup) / (total_epoch-warmup-1))) / 2 if epoch != total_epoch - 1 else 1
-      search_model.prune(prune_rate)
-      num_unpruned_edges = compute_num_unpruned_edges(search_model.genos)
-      logger.log('[{:}] prune_rate={:}, num_unpruned_edges={:}.'.format(epoch_str, prune_rate, num_unpruned_edges))
+    # valid
+    with torch.no_grad():
+      test_loss, test_top1, test_top5 = test_func(test_loader, network, criterion, xargs.print_freq, logger)
+    logger.log('[{:}] evaluate : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%.'.format(epoch_str, test_loss , test_top1 , test_top5 ))
 
     genotypes[epoch]        = search_model.genos
     pruned_genotypes[epoch] = search_model.get_genos()
