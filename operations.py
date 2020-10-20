@@ -232,46 +232,46 @@ def drop_path(x, drop_prob):
 
 class AuxiliaryHeadCIFAR(nn.Module):
 
-    def __init__(self, C, num_classes):
-        super(AuxiliaryHeadCIFAR, self).__init__()
-        self.features = nn.Sequential(
-            nn.ReLU(inplace=False),
-            nn.AvgPool2d(5, stride=3, padding=0, count_include_pad=False),
-            nn.Conv2d(C, 128, 1, bias=False),
-            nn.BatchNorm2d(128),
-            nn.ReLU(inplace=False),
-            nn.Conv2d(128, 768, 2, bias=False),
-            nn.BatchNorm2d(768),
-            nn.ReLU(inplace=False)
-        )
-        self.classifier = nn.Linear(768, num_classes)
+  def __init__(self, C, num_classes):
+    super(AuxiliaryHeadCIFAR, self).__init__()
+    self.features = nn.Sequential(
+      nn.ReLU(inplace=False),
+      nn.AvgPool2d(5, stride=3, padding=0, count_include_pad=False),
+      nn.Conv2d(C, 128, 1, bias=False),
+      nn.BatchNorm2d(128),
+      nn.ReLU(inplace=False),
+      nn.Conv2d(128, 768, 2, bias=False),
+      nn.BatchNorm2d(768),
+      nn.ReLU(inplace=False)
+    )
+    self.classifier = nn.Linear(768, num_classes)
 
-    def forward(self, input):
-        output = self.features(input)
-        output = self.classifier(output.view(output.size(0),-1))
-        return output
+  def forward(self, input):
+    output = self.features(input)
+    output = self.classifier(output.view(output.size(0),-1))
+    return output
 
 
 class AuxiliaryHeadImageNet(nn.Module):
 
-    def __init__(self, C, num_classes):
-        super(AuxiliaryHeadImageNet, self).__init__()
-        self.features = nn.Sequential(
-            nn.ReLU(inplace=False),
-            nn.AvgPool2d(5, stride=2, padding=0, count_include_pad=False),
-            nn.Conv2d(C, 128, 1, bias=False),
-            nn.BatchNorm2d(128),
-            nn.ReLU(inplace=False),
-            nn.Conv2d(128, 768, 2, bias=False),
-            nn.BatchNorm2d(768),
-            nn.ReLU(inplace=False)
-        )
-        self.classifier = nn.Linear(768, num_classes)
+  def __init__(self, C, num_classes):
+    super(AuxiliaryHeadImageNet, self).__init__()
+    self.features = nn.Sequential(
+      nn.ReLU(inplace=False),
+      nn.AvgPool2d(5, stride=2, padding=0, count_include_pad=False),
+      nn.Conv2d(C, 128, 1, bias=False),
+      nn.BatchNorm2d(128),
+      nn.ReLU(inplace=False),
+      nn.Conv2d(128, 768, 2, bias=False),
+      nn.BatchNorm2d(768),
+      nn.ReLU(inplace=False)
+    )
+    self.classifier = nn.Linear(768, num_classes)
 
-    def forward(self, input):
-        output = self.features(input)
-        output = self.classifier(output.view(output.size(0),-1))
-        return output
+  def forward(self, input):
+    output = self.features(input)
+    output = self.classifier(output.view(output.size(0),-1))
+    return output
 
 
 # Searching for A Robust Neural Architecture in Four GPU Hours

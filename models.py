@@ -187,7 +187,7 @@ class NASCell(nn.Module):
             index   = indexs[ self.edge2index[node_str] ].item()
           else: continue
         c = op(h, weights, index)
-        if self.training and drop_path_prob < 1.0 and index != self.op_names.index('skip_connect'):
+        if self.training and drop_path_prob > 0 and index != self.op_names.index('skip_connect'):
           c = drop_path(c, drop_path_prob)
         clist.append( c )
 
