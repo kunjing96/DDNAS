@@ -231,13 +231,13 @@ def main(xargs):
   # start training
   from genotypes import GENOTYPES
   start_time, search_time, epoch_time, warmup, total_epoch, gamma, genos, total_edges = time.time(), AverageMeter(), AverageMeter(), config.warmup, config.warmup+config.epochs, config.gamma, GENOTYPES[xargs.init_genos], (model_config.N*3+2)*model_config.steps*2
-  for epoch in range(start_epoch, total_epoch):
-    epoch_str = '{:03d}-{:03d}'.format(epoch, total_epoch)
-    need_time = 'Time Left: {:}'.format( convert_secs2time(epoch_time.val * (total_epoch-epoch), True) )
+  for epoch in range(start_epoch, total_epoch+total_epoch):
+    epoch_str = '{:03d}-{:03d}'.format(epoch, total_epoch+total_epoch)
+    need_time = 'Time Left: {:}'.format( convert_secs2time(epoch_time.val * (total_epoch+total_epoch-epoch), True) )
     # update lr
-    w_scheduler.update(epoch, 0.0)
+    w_scheduler.update(epoch%total_epoch, 0.0)
     logger.log('\n[The {:}-th epoch] {:}, LR={:}'.format(epoch_str, need_time, min(w_scheduler.get_lr())))
-    if epoch < warmup:
+    if epoch < warmup or epoch >= total_epoch:
       # set initial genos
       if epoch == 0:
         search_model.set_genos(genos)
