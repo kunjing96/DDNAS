@@ -14,11 +14,41 @@ class MixedOp(nn.Module):
       op = OPS[primitive](C, C, stride, affine, track_running_stats)
       self._ops.append(op)
 
+    self.arch_parameter = nn.Parameter( 1e-3*torch.randn(1, len(space)) )
+
   def reset_parameters(self):
+    with torch.no_grad():
+      self.arch_parameter.normal_(mean=0, std=1).mul_(1e-3)
     for op in self._ops:
       op.reset_parameters()
 
-  def forward(self, x, weights, index):
+  def get_alpha(self):
+    return self.arch_parameter
+
+  def show_alpha(self, softmax=True):
+    with torch.no_grad():
+      if softmax:
+        alpha = nn.functional.softmax(self.arch_parameter, dim=-1).detach().cpu()
+      else:
+        alpha = self.arch_parameter.detach().cpu()
+    return alpha
+
+  def forward(self, x, weights, index, tau):
+    def get_gumbel_prob(xins, tau):
+      while True:
+        gumbels = -torch.empty_like(xins).exponential_().log()
+        logits  = (xins.log_softmax(dim=1) + gumbels) / tau
+        probs   = nn.functional.softmax(logits, dim=1)
+        index   = probs.max(-1, keepdim=True)[1]
+        one_h   = torch.zeros_like(logits).scatter_(-1, index, 1.0)
+        hardwts = one_h - probs.detach() + probs
+        if (torch.isinf(gumbels).any()) or (torch.isinf(probs).any()) or (torch.isnan(probs).any()):
+          continue
+        else: break
+      return hardwts, index
+
+    weightss, indexs = get_gumbel_prob(self.arch_parameter, tau)
+    if weights is None and index is None: weights, index = weightss[0], indexs[0]
     return self._ops[index](x) * weights[index]
 
 
@@ -92,8 +122,9 @@ class NASCell(nn.Module):
         geno.append( (selected_edge_0, selected_edge_1) )
       return geno
 
+    arch_parameters = torch.cat(self.get_alpha(), dim=0)
     with torch.no_grad():
-      geno = _parse(torch.softmax(self.arch_parameters, dim=-1).cpu().numpy())
+      geno = _parse(torch.softmax(arch_parameters, dim=-1).cpu().numpy())
     return geno
 
   def birth(self, birth_rate=1.0):
@@ -117,14 +148,20 @@ class NASCell(nn.Module):
       l    , r     = self.geno[i][0], self.geno[i][1]
       if l[0] is None and l[1] == -1 and np.random.random() < prune_rate:
         l = new_l
+        node_str = '{:}<-{:}'.format(i+2, new_l[1])
+        self.ops[node_str].get_alpha().grad = None
       if r[0] is None and r[1] == -1 and np.random.random() < prune_rate:
         r = new_r
+        node_str = '{:}<-{:}'.format(i+2, new_r[1])
+        self.ops[node_str].get_alpha().grad = None
+      if l[0] is not None and l[1] != -1 and r[0] is not None and r[1] != -1:
+        for j in range(i+2):
+          node_str = '{:}<-{:}'.format(i+2, j)
+          self.ops[node_str].get_alpha().grad = None
       pruned_geno.append((l, r))
     self.geno = pruned_geno
 
   def reset_parameters(self):
-    with torch.no_grad():
-      self.arch_parameters.normal_(mean=0, std=1).mul_(1e-3)
     for i in range(self._steps):
       op0, pre0 = self.geno[i][0][0], self.geno[i][0][1]
       op1, pre1 = self.geno[i][1][0], self.geno[i][1][1]
@@ -137,32 +174,22 @@ class NASCell(nn.Module):
           self.ops[ node_str ].reset_parameters()
 
   def get_alpha(self):
-    return self.arch_parameters
+    arch_parameters = []
+    for i in range(self._steps):
+      for j in range(2+i):
+        node_str = '{:}<-{:}'.format(i+2, j)
+        arch_parameters.append(self.ops[node_str].get_alpha())
+    return arch_parameters
 
   def show_alpha(self, softmax=True):
-    with torch.no_grad():
-      if softmax:
-        alpha = nn.functional.softmax(self.arch_parameters, dim=-1).detach().cpu().numpy()
-      else:
-        alpha = self.arch_parameters.detach().cpu().numpy()
-    return alpha
+    alpha = []
+    for i in range(self._steps):
+      for j in range(2+i):
+        node_str = '{:}<-{:}'.format(i+2, j)
+        alpha.append(self.ops[node_str].show_alpha(softmax=softmax))
+    return torch.cat(alpha, dim=0).numpy()
 
   def forward(self, s0, s1, tau, drop_path_prob):
-    def get_gumbel_prob(xins, tau):
-      while True:
-        gumbels = -torch.empty_like(xins).exponential_().log()
-        logits  = (xins.log_softmax(dim=1) + gumbels) / tau
-        probs   = nn.functional.softmax(logits, dim=1)
-        index   = probs.max(-1, keepdim=True)[1]
-        one_h   = torch.zeros_like(logits).scatter_(-1, index, 1.0)
-        hardwts = one_h - probs.detach() + probs
-        if (torch.isinf(gumbels).any()) or (torch.isinf(probs).any()) or (torch.isnan(probs).any()):
-          continue
-        else: break
-      return hardwts, index
-
-    weightss, indexs = get_gumbel_prob(self.arch_parameters, tau)
-
     s0 = self.preprocess0(s0)
     s1 = self.preprocess1(s1)
 
@@ -183,10 +210,10 @@ class NASCell(nn.Module):
           weights[index] = 1
         else:
           if len(no_mixed_op_edges) < 2:
-            weights = weightss[ self.edge2index[node_str] ]
-            index   = indexs[ self.edge2index[node_str] ].item()
+            weights = None
+            index   = None
           else: continue
-        c = op(h, weights, index)
+        c = op(h, weights, index, tau)
         if self.training and drop_path_prob > 0 and index != self.op_names.index('skip_connect'):
           c = drop_path(c, drop_path_prob)
         clist.append( c )
@@ -252,7 +279,10 @@ class _NASNetwork(nn.Module):
     return xlist
 
   def get_alphas(self):
-    return [cell.get_alpha() for cell in self.cells]
+    alphas = []
+    for cell in self.cells:
+      alphas.extend(cell.get_alpha())
+    return alphas
 
   def show_alphas(self, softmax=True):
     return [cell.show_alpha(softmax=softmax) for cell in self.cells]
