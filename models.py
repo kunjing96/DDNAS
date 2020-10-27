@@ -75,7 +75,6 @@ class NASCell(nn.Module):
     self.edge2index = {key:i for i, key in enumerate(self.edge_keys)}
     self.num_edges  = len(self.ops)
 
-    self.arch_parameters = nn.Parameter( 1e-3*torch.randn(self.num_edges, len(space)) )
     self.geno = [ ((None, -1), (None, -1)) ] * self._steps
 
   @property
@@ -206,7 +205,7 @@ class NASCell(nn.Module):
         op = self.ops[ node_str ]
         if node_str in no_mixed_op_edges.keys():
           index = self.op_names.index( no_mixed_op_edges[node_str] )
-          weights = torch.zeros_like(self.arch_parameters[0])
+          weights = torch.zeros_like(op.get_alpha()[0])
           weights[index] = 1
         else:
           if len(no_mixed_op_edges) < 2:
