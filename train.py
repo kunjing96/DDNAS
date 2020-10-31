@@ -7,98 +7,6 @@ from flop_benchmark import get_model_infos
 from operations import SearchSpaceNames
 
 
-def search_func(xloader, network, criterion, auxiliary, scheduler, w_optimizer, a_optimizer, epoch_str, print_freq, logger):
-  data_time, batch_time = AverageMeter(), AverageMeter()
-  losses, top1, top5 = AverageMeter(), AverageMeter(), AverageMeter()
-  network.train()
-  end = time.time()
-  for step, (inputs, targets) in enumerate(xloader):
-    scheduler.update(None, 1.0 * step / len(xloader))
-    targets = targets.cuda(non_blocking=True)
-    # measure data loading time
-    data_time.update(time.time() - end)
-    
-    # update the weights and the architecture-weight
-    w_optimizer.zero_grad()
-    a_optimizer.zero_grad()
-    logits, logits_aux = network(inputs)
-    loss = criterion(logits, targets)
-    if logits_aux is not None:
-      loss_aux = criterion(logits_aux, targets)
-      loss = loss + auxiliary*loss_aux
-    loss.backward()
-    torch.nn.utils.clip_grad_norm_(network.parameters(), 5)
-    w_optimizer.step()
-    a_optimizer.step()
-    # record
-    prec1, prec5 = obtain_accuracy(logits.data, targets.data, topk=(1, 5))
-    losses.update(loss.item(),  inputs.size(0))
-    top1.update  (prec1.item(), inputs.size(0))
-    top5.update  (prec5.item(), inputs.size(0))
-
-    # measure elapsed time
-    batch_time.update(time.time() - end)
-    end = time.time()
-
-    if step % print_freq == 0 or step + 1 == len(xloader):
-      Sstr = '*SEARCH* ' + time_string() + ' [{:}][{:03d}/{:03d}]'.format(epoch_str, step, len(xloader))
-      Tstr = 'Time {batch_time.val:.2f} ({batch_time.avg:.2f}) Data {data_time.val:.2f} ({data_time.avg:.2f})'.format(batch_time=batch_time, data_time=data_time)
-      Wstr = 'Base [Loss {loss.val:.3f} ({loss.avg:.3f})  Prec@1 {top1.val:.2f} ({top1.avg:.2f}) Prec@5 {top5.val:.2f} ({top5.avg:.2f})]'.format(loss=losses, top1=top1, top5=top5)
-      logger.log(Sstr + ' ' + Tstr + ' ' + Wstr)
-  return losses.avg, top1.avg, top5.avg
-
-
-'''def search_func(xloader, network, criterion, scheduler, w_optimizer, a_optimizer, epoch_str, print_freq, logger):
-  data_time, batch_time = AverageMeter(), AverageMeter()
-  base_losses, base_top1, base_top5 = AverageMeter(), AverageMeter(), AverageMeter()
-  arch_losses, arch_top1, arch_top5 = AverageMeter(), AverageMeter(), AverageMeter()
-  network.train()
-  end = time.time()
-  for step, (base_inputs, base_targets, arch_inputs, arch_targets) in enumerate(xloader):
-    scheduler.update(None, 1.0 * step / len(xloader))
-    base_targets = base_targets.cuda(non_blocking=True)
-    arch_targets = arch_targets.cuda(non_blocking=True)
-    # measure data loading time
-    data_time.update(time.time() - end)
-    
-    # update the weights
-    w_optimizer.zero_grad()
-    logits, _ = network(base_inputs)
-    base_loss = criterion(logits, base_targets)
-    base_loss.backward()
-    torch.nn.utils.clip_grad_norm_(network.parameters(), 5)
-    w_optimizer.step()
-    # record
-    base_prec1, base_prec5 = obtain_accuracy(logits.data, base_targets.data, topk=(1, 5))
-    base_losses.update(base_loss.item(),  base_inputs.size(0))
-    base_top1.update  (base_prec1.item(), base_inputs.size(0))
-    base_top5.update  (base_prec5.item(), base_inputs.size(0))
-
-    # update the architecture-weight
-    a_optimizer.zero_grad()
-    logits, logits_aux = network(arch_inputs)
-    arch_loss = criterion(logits, arch_targets)
-    arch_loss.backward()
-    a_optimizer.step()
-    # record
-    arch_prec1, arch_prec5 = obtain_accuracy(logits.data, arch_targets.data, topk=(1, 5))
-    arch_losses.update(arch_loss.item(),  arch_inputs.size(0))
-    arch_top1.update  (arch_prec1.item(), arch_inputs.size(0))
-    arch_top5.update  (arch_prec5.item(), arch_inputs.size(0))
-
-    # measure elapsed time
-    batch_time.update(time.time() - end)
-    end = time.time()
-
-    if step % print_freq == 0 or step + 1 == len(xloader):
-      Sstr = '*SEARCH* ' + time_string() + ' [{:}][{:03d}/{:03d}]'.format(epoch_str, step, len(xloader))
-      Tstr = 'Time {batch_time.val:.2f} ({batch_time.avg:.2f}) Data {data_time.val:.2f} ({data_time.avg:.2f})'.format(batch_time=batch_time, data_time=data_time)
-      Wstr = 'Base [Loss {loss.val:.3f} ({loss.avg:.3f})  Prec@1 {top1.val:.2f} ({top1.avg:.2f}) Prec@5 {top5.val:.2f} ({top5.avg:.2f})]'.format(loss=base_losses, top1=base_top1, top5=base_top5)
-      Astr = 'Arch [Loss {loss.val:.3f} ({loss.avg:.3f})  Prec@1 {top1.val:.2f} ({top1.avg:.2f}) Prec@5 {top5.val:.2f} ({top5.avg:.2f})]'.format(loss=arch_losses, top1=arch_top1, top5=arch_top5)
-      logger.log(Sstr + ' ' + Tstr + ' ' + Wstr + ' ' + Astr)
-  return base_losses.avg, base_top1.avg, base_top5.avg, arch_losses.avg, arch_top1.avg, arch_top5.avg'''
-
-
 def train_func(xloader, network, criterion, auxiliary, scheduler, optimizer, epoch_str, print_freq, logger):
   data_time, batch_time = AverageMeter(), AverageMeter()
   losses, top1, top5 = AverageMeter(), AverageMeter(), AverageMeter()
@@ -180,8 +88,8 @@ def main(xargs):
 
   train_data, test_data, xshape, class_num = get_datasets(xargs.dataset, xargs.data_path, xargs.cutout)
   config = load_config(xargs.config_path, {'class_num': class_num, 'xshape': xshape}, logger)
-  search_loader, train_loader, test_loader = get_nas_search_loaders(train_data, test_data, xargs.dataset, config.batch_size, xargs.workers)
-  logger.log('||||||| {:10s} ||||||| Search-Loader-Num={:}, batch size={:}'.format(xargs.dataset, len(search_loader), config.batch_size))
+  _, train_loader, test_loader = get_nas_search_loaders(train_data, test_data, xargs.dataset, config.batch_size, xargs.workers)
+  logger.log('||||||| {:10s} ||||||| Train-Loader-Num={:}, batch size={:}'.format(xargs.dataset, len(train_loader), config.batch_size))
   logger.log('||||||| {:10s} ||||||| Config={:}'.format(xargs.dataset, config))
 
   search_space = SearchSpaceNames[xargs.search_space_name]
@@ -237,6 +145,8 @@ def main(xargs):
     # update lr
     w_scheduler.update(epoch, 0.0)
     logger.log('\n[The {:}-th epoch] {:}, LR={:}'.format(epoch_str, need_time, min(w_scheduler.get_lr())))
+    # update drop_path_prob
+    if hasattr(search_model, 'update_drop_path'): search_model.update_drop_path(model_config.drop_path_prob * epoch / total_epoch)
 
     # set initial genos
     if epoch == 0:

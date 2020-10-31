@@ -7,7 +7,7 @@ from flop_benchmark import get_model_infos
 from operations import SearchSpaceNames
 
 
-def search_func(xloader, network, criterion, auxiliary, scheduler, w_optimizer, a_optimizer, epoch_str, print_freq, logger):
+def search_func_v1(xloader, network, criterion, auxiliary, scheduler, w_optimizer, a_optimizer, epoch_str, print_freq, logger):
   data_time, batch_time = AverageMeter(), AverageMeter()
   losses, top1, top5 = AverageMeter(), AverageMeter(), AverageMeter()
   network.train()
@@ -48,7 +48,7 @@ def search_func(xloader, network, criterion, auxiliary, scheduler, w_optimizer, 
   return losses.avg, top1.avg, top5.avg
 
 
-'''def search_func(xloader, network, criterion, scheduler, w_optimizer, a_optimizer, epoch_str, print_freq, logger):
+def search_func_v2(xloader, network, criterion, auxiliary, scheduler, w_optimizer, a_optimizer, epoch_str, print_freq, logger):
   data_time, batch_time = AverageMeter(), AverageMeter()
   base_losses, base_top1, base_top5 = AverageMeter(), AverageMeter(), AverageMeter()
   arch_losses, arch_top1, arch_top5 = AverageMeter(), AverageMeter(), AverageMeter()
@@ -63,8 +63,11 @@ def search_func(xloader, network, criterion, auxiliary, scheduler, w_optimizer, 
     
     # update the weights
     w_optimizer.zero_grad()
-    logits, _ = network(base_inputs)
+    logits, logits_aux = network(base_inputs)
     base_loss = criterion(logits, base_targets)
+    if logits_aux is not None:
+      base_loss_aux = criterion(logits_aux, targets)
+      base_loss = base_loss + auxiliary*base_loss_aux
     base_loss.backward()
     torch.nn.utils.clip_grad_norm_(network.parameters(), 5)
     w_optimizer.step()
@@ -78,6 +81,9 @@ def search_func(xloader, network, criterion, auxiliary, scheduler, w_optimizer, 
     a_optimizer.zero_grad()
     logits, logits_aux = network(arch_inputs)
     arch_loss = criterion(logits, arch_targets)
+    if logits_aux is not None:
+      arch_loss_aux = criterion(logits_aux, targets)
+      arch_loss = arch_loss + auxiliary*arch_loss_aux
     arch_loss.backward()
     a_optimizer.step()
     # record
@@ -96,7 +102,7 @@ def search_func(xloader, network, criterion, auxiliary, scheduler, w_optimizer, 
       Wstr = 'Base [Loss {loss.val:.3f} ({loss.avg:.3f})  Prec@1 {top1.val:.2f} ({top1.avg:.2f}) Prec@5 {top5.val:.2f} ({top5.avg:.2f})]'.format(loss=base_losses, top1=base_top1, top5=base_top5)
       Astr = 'Arch [Loss {loss.val:.3f} ({loss.avg:.3f})  Prec@1 {top1.val:.2f} ({top1.avg:.2f}) Prec@5 {top5.val:.2f} ({top5.avg:.2f})]'.format(loss=arch_losses, top1=arch_top1, top5=arch_top5)
       logger.log(Sstr + ' ' + Tstr + ' ' + Wstr + ' ' + Astr)
-  return base_losses.avg, base_top1.avg, base_top5.avg, arch_losses.avg, arch_top1.avg, arch_top5.avg'''
+  return base_losses.avg, base_top1.avg, base_top5.avg, arch_losses.avg, arch_top1.avg, arch_top5.avg
 
 
 def train_func(xloader, network, criterion, auxiliary, scheduler, optimizer, epoch_str, print_freq, logger):
@@ -237,6 +243,8 @@ def main(xargs):
     # update lr
     w_scheduler.update(epoch%total_epoch, 0.0)
     logger.log('\n[The {:}-th epoch] {:}, LR={:}'.format(epoch_str, need_time, min(w_scheduler.get_lr())))
+    # update drop_path_prob
+    if hasattr(search_model, 'update_drop_path'): search_model.update_drop_path(model_config.drop_path_prob * (epoch%total_epoch) / total_epoch)
     if epoch < warmup or epoch >= total_epoch:
       # set initial genos
       if epoch == 0:
@@ -264,8 +272,8 @@ def main(xargs):
       logger.log('[{:}] birth_rate={:}, num_unpruned_edges={:}.'.format(epoch_str, birth_rate, num_unpruned_edges))
 
       #search
-      # search_w_loss, search_w_top1, search_w_top5, valid_a_loss , valid_a_top1 , valid_a_top5 = search_func(search_loader, network, criterion, w_scheduler, w_optimizer, a_optimizer, epoch_str, xargs.print_freq, logger)
-      search_loss, search_top1, search_top5 = search_func(train_loader, network, criterion if criterion_smooth is None else criterion_smooth, config.auxiliary, w_scheduler, w_optimizer, a_optimizer, epoch_str, xargs.print_freq, logger)
+      search_loss, search_top1, search_top5 = search_func_v1(train_loader, network, criterion if criterion_smooth is None else criterion_smooth, config.auxiliary, w_scheduler, w_optimizer, a_optimizer, epoch_str, xargs.print_freq, logger)
+      #search_w_loss, search_w_top1, search_w_top5, valid_a_loss , valid_a_top1 , valid_a_top5 = search_func_v2(search_loader, network, criterion if criterion_smooth is None else criterion_smooth, config.auxiliary, w_scheduler, w_optimizer, a_optimizer, epoch_str, xargs.print_freq, logger)
       search_time.update(time.time() - start_time)
       logger.log('[{:}] searching : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%, time-cost={:.1f} s.'.format(epoch_str, search_loss, search_top1, search_top5, search_time.sum))
 

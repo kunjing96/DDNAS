@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from copy import deepcopy
-from operations import OPS, AuxiliaryHeadCIFAR, AuxiliaryHeadImageNet, drop_path
+from operations import OPS, AuxiliaryHeadCIFAR, AuxiliaryHeadImageNet, drop_path, Identity
 
 
 class MixedOp(nn.Module):
@@ -48,6 +48,7 @@ class MixedOp(nn.Module):
       return hardwts, index
 
     weightss, indexs = get_gumbel_prob(self.arch_parameter, tau)
+    # if weights is None and index is None, the edge is mixed and compute output by gumbel sampling; otherwise it is a fixed op edge.
     if weights is None and index is None: weights, index = weightss[0], indexs[0]
     return self._ops[index](x) * weights[index]
 
@@ -196,24 +197,23 @@ class NASCell(nn.Module):
     for i in range(self._steps):
       op0, pre0 = self.geno[i][0][0], self.geno[i][0][1]
       op1, pre1 = self.geno[i][1][0], self.geno[i][1][1]
-      no_mixed_op_edges = {}
-      if pre0 != -1: no_mixed_op_edges.update({'{:}<-{:}'.format(i+2, pre0): op0})
-      if pre1 != -1: no_mixed_op_edges.update({'{:}<-{:}'.format(i+2, pre1): op1})
+      fixed_op_edges = {}
+      if op0 is not None and pre0 != -1: fixed_op_edges.update({'{:}<-{:}'.format(i+2, pre0): op0})
+      if op1 is not None and pre1 != -1: fixed_op_edges.update({'{:}<-{:}'.format(i+2, pre1): op1})
       clist = []
       for j, h in enumerate(states):
         node_str = '{:}<-{:}'.format(i+2, j)
         op = self.ops[ node_str ]
-        if node_str in no_mixed_op_edges.keys():
-          index = self.op_names.index( no_mixed_op_edges[node_str] )
+        if node_str in fixed_op_edges.keys(): # fixed op edge
+          index = self.op_names.index( fixed_op_edges[node_str] )
           weights = torch.zeros_like(op.get_alpha()[0])
           weights[index] = 1
-        else:
-          if len(no_mixed_op_edges) < 2:
-            weights = None
-            index   = None
-          else: continue
+        else: # mixed op edge
+          if len(fixed_op_edges) < 2: # if there are less than two (0, 1) fixed op edges, it is mixed op edge.
+            weights, index = None, None
+          else: continue # otherwise mixed op edge is not considered
         c = op(h, weights, index, tau)
-        if self.training and drop_path_prob > 0 and index != self.op_names.index('skip_connect'):
+        if self.training and drop_path_prob > 0 and not isinstance(op, Identity):
           c = drop_path(c, drop_path_prob)
         clist.append( c )
 
@@ -246,6 +246,9 @@ class _NASNetwork(nn.Module):
 
   def get_tau(self):
     return self.tau
+
+  def update_drop_path(self, drop_path_prob):
+    self._drop_path_prob = drop_path_prob
 
   def set_genos(self, genos):
     assert len(genos) == self._Layer, 'The length of network genotypes must be {:}.'.format(self._Layer)

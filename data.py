@@ -86,7 +86,7 @@ def get_datasets(name, root, cutout):
     mean = [x / 255 for x in [129.3, 124.1, 112.4]]
     std  = [x / 255 for x in [68.2, 65.4, 70.4]]
   elif name == 'imagenet':
-    mean = [0.229, 0.224, 0.225]
+    mean = [0.485, 0.456, 0.406]
     std  = [0.229, 0.224, 0.225]
   else:
     raise TypeError("Unknow dataset : {:}".format(name))

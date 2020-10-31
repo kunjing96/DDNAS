@@ -21,8 +21,8 @@ OMP_NUM_THREADS=4 python train.py \
 	--save_dir ${save_dir} \
 	--dataset ${dataset} --data_path ${data_path} \
 	--search_space_name ${space} \
-	--config_path  config/DDNAS-OPTS-CIFAR.config \
-	--model_config config/DDNAS-ARCHS-CIFAR.config \
+	--config_path  config/GDAS-OPTS-CIFAR.config \
+	--model_config config/GDAS-ARCHS-CIFAR.config \
 	--tau_max 10 --tau_min 0.1 --cutout ${cutout} \
 	--arch_learning_rate 0.0003 --arch_weight_decay 0.001 \
 	--workers 4 --print_freq 200 --rand_seed ${seed} \
