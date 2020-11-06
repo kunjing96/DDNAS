@@ -236,7 +236,7 @@ def main(xargs):
 
   # start training
   from genotypes import GENOTYPES
-  start_time, search_time, epoch_time, warmup, total_epoch, gamma, genos, total_edges = time.time(), AverageMeter(), AverageMeter(), config.warmup, config.warmup+config.epochs, config.gamma, GENOTYPES[xargs.init_genos], (model_config.N*3+2)*model_config.steps*2
+  start_time, search_time, epoch_time, warmup, total_epoch, gamma, genos, total_edges, num_unpruned_edges_1, num_unpruned_edges_2 = time.time(), AverageMeter(), AverageMeter(), config.warmup, config.warmup+config.epochs, config.gamma, GENOTYPES[xargs.init_genos], (model_config.N*3+2)*model_config.steps*2, 0, 0
   for epoch in range(start_epoch, total_epoch+total_epoch):
     epoch_str = '{:03d}-{:03d}'.format(epoch, total_epoch+total_epoch)
     need_time = 'Time Left: {:}'.format( convert_secs2time(epoch_time.val * (total_epoch+total_epoch-epoch), True) )
