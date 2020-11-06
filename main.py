@@ -266,10 +266,11 @@ def main(xargs):
       logger.log('[{:}] tau={:}.'.format(epoch_str, search_model.get_tau()))
 
       # update birth rate and bear edges
-      birth_rate = ( math.e**math.sqrt(1 - (epoch-warmup)/(total_epoch-warmup)) ) * gamma * (1 + math.cos(math.pi * (epoch-warmup) / (total_epoch-warmup-1))) / 2 if epoch != total_epoch - 1 else 0
+      gamma_birth_rate = gamma * ((epoch-warmup) / (total_epoch-warmup-1)**2)
+      birth_rate = gamma_birth_rate * (1 + math.cos(math.pi * (epoch-warmup) / (total_epoch-warmup-1))) / 2 if epoch != total_epoch - 1 else 0
       search_model.birth(birth_rate)
-      num_unpruned_edges = compute_num_unpruned_edges(search_model.genos)
-      logger.log('[{:}] birth_rate={:}, num_unpruned_edges={:}.'.format(epoch_str, birth_rate, num_unpruned_edges))
+      num_unpruned_edges_1 = compute_num_unpruned_edges(search_model.genos)
+      logger.log('[{:}] birth_rate={:}, num_unpruned_edges={:}.'.format(epoch_str, birth_rate, num_unpruned_edges_1))
 
       #search
       search_loss, search_top1, search_top5 = search_func_v1(train_loader, network, criterion if criterion_smooth is None else criterion_smooth, config.auxiliary, w_scheduler, w_optimizer, a_optimizer, epoch_str, xargs.print_freq, logger)
@@ -283,10 +284,11 @@ def main(xargs):
       logger.log('[{:}] evaluate : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%.'.format(epoch_str, test_loss , test_top1 , test_top5 ))
 
       # update prune rate and prune edges
-      prune_rate = ( math.e**( math.sqrt(num_unpruned_edges/total_edges) / (1-(epoch-warmup)/(total_epoch-warmup))**2 ) ) * gamma * (1 + math.sin(math.pi * (epoch-warmup) / (total_epoch-warmup-1))) / 2 if epoch != total_epoch - 1 else 1
+      gamma_prune_rate = 100 * (birth_rate * (total_edges-num_unpruned_edges_2) + num_unpruned_edges_2) / (gamma * birth_rate * (total_edges-num_unpruned_edges_2) + num_unpruned_edges_2 + 1e-6) * ((epoch-warmup) / (total_epoch-warmup-1)**2)
+      prune_rate = gamma_prune_rate * (1 + math.cos(math.pi * (epoch-warmup) / (total_epoch-warmup-1) + math.pi)) / 2 if epoch != total_epoch - 1 else 1
       search_model.prune(prune_rate)
-      num_unpruned_edges = compute_num_unpruned_edges(search_model.genos)
-      logger.log('[{:}] prune_rate={:}, num_unpruned_edges={:}.'.format(epoch_str, prune_rate, num_unpruned_edges))
+      num_unpruned_edges_2 = compute_num_unpruned_edges(search_model.genos)
+      logger.log('[{:}] prune_rate={:}, num_unpruned_edges={:}.'.format(epoch_str, prune_rate, num_unpruned_edges_2))
 
     genotypes[epoch]        = search_model.genos
     pruned_genotypes[epoch] = search_model.get_genos()
