@@ -33,7 +33,7 @@ class MixedOp(nn.Module):
         alpha = self.arch_parameter.detach().cpu()
     return alpha
 
-  def forward(self, x, weights, index, tau):
+  def forward_gdas(self, x, tau):
     def get_gumbel_prob(xins, tau):
       while True:
         gumbels = -torch.empty_like(xins).exponential_().log()
@@ -48,9 +48,25 @@ class MixedOp(nn.Module):
       return hardwts, index
 
     weightss, indexs = get_gumbel_prob(self.arch_parameter, tau)
-    # if weights is None and index is None, the edge is mixed and compute output by gumbel sampling; otherwise it is a fixed op edge.
-    if weights is None and index is None: weights, index = weightss[0], indexs[0]
+    weights, index = weightss[0], indexs[0]
     return self._ops[index](x) * weights[index]
+
+  def forward_darts(self, x):
+    weightss = nn.functional.softmax(self.arch_parameter, dim=1)
+    weights = weightss[0]
+    return sum(w * op(x) for w, op in zip(weights, self._ops))
+
+  def forward(self, x, weights, index, tau, which_forward):
+    # if weights is None and index is None, the edge is mixed and compute output by gumbel sampling (GDAS) or softmax (DARTS); otherwise it is a fixed op edge.
+    if weights is None and index is None:
+      if which_forward == 'GDAS':
+        return self.forward_gdas(x, tau)
+      elif which_forward == 'DARTS':
+        return self.forward_darts(x)
+      else:
+        raise ValueError('No {:} forward implementation.'.format(which_forward))
+    else:
+      return self._ops[index](x) * weights[index]
 
 
 class NASCell(nn.Module):
@@ -189,7 +205,7 @@ class NASCell(nn.Module):
         alpha.append(self.ops[node_str].show_alpha(softmax=softmax))
     return torch.cat(alpha, dim=0).numpy()
 
-  def forward(self, s0, s1, tau, drop_path_prob):
+  def forward(self, s0, s1, tau, drop_path_prob, which_forward):
     s0 = self.preprocess0(s0)
     s1 = self.preprocess1(s1)
 
@@ -212,7 +228,7 @@ class NASCell(nn.Module):
           if len(fixed_op_edges) < 2: # if there are less than two (0, 1) fixed op edges, it is mixed op edge.
             weights, index = None, None
           else: continue # otherwise mixed op edge is not considered
-        c = op(h, weights, index, tau)
+        c = op(h, weights, index, tau, which_forward)
         if self.training and drop_path_prob > 0 and not isinstance(op, Identity):
           c = drop_path(c, drop_path_prob)
         clist.append( c )
@@ -227,7 +243,7 @@ class NASCell(nn.Module):
 
 class _NASNetwork(nn.Module):
 
-  def __init__(self, C, N, steps, multiplier, stem_multiplier, num_classes, drop_prob, drop_path_prob, search_space, affine, track_running_stats, auxiliary):
+  def __init__(self, C, N, steps, multiplier, stem_multiplier, num_classes, drop_prob, drop_path_prob, search_space, affine, track_running_stats, auxiliary, which_forward):
     super(_NASNetwork, self).__init__()
     self._C        = C
     self._layerN   = N
@@ -237,6 +253,7 @@ class _NASNetwork(nn.Module):
     self.auxiliary  = auxiliary
     self._drop_prob = drop_prob
     self._drop_path_prob = drop_path_prob
+    self._which_forward = which_forward
     self.op_names   = deepcopy( search_space )
 
     self.tau = 10
@@ -304,8 +321,8 @@ class _NASNetwork(nn.Module):
 
 class NASNetworkCIFAR(_NASNetwork):
 
-  def __init__(self, C, N, steps, multiplier, stem_multiplier, num_classes, drop_prob, drop_path_prob, search_space, affine, track_running_stats, auxiliary):
-    super(NASNetworkCIFAR, self).__init__(C, N, steps, multiplier, stem_multiplier, num_classes, drop_prob, drop_path_prob, search_space, affine, track_running_stats, auxiliary)
+  def __init__(self, C, N, steps, multiplier, stem_multiplier, num_classes, drop_prob, drop_path_prob, search_space, affine, track_running_stats, auxiliary, which_forward):
+    super(NASNetworkCIFAR, self).__init__(C, N, steps, multiplier, stem_multiplier, num_classes, drop_prob, drop_path_prob, search_space, affine, track_running_stats, auxiliary, which_forward)
     self.stem = nn.Sequential(
       nn.Conv2d(3, C*stem_multiplier, kernel_size=3, padding=1, bias=False),
       nn.BatchNorm2d(C*stem_multiplier)
@@ -338,7 +355,7 @@ class NASNetworkCIFAR(_NASNetwork):
     logits_aux = None
     s0 = s1 = self.stem(inputs)
     for index, cell in enumerate(self.cells):
-      s0, s1 = s1, cell(s0, s1, self.tau, self._drop_path_prob)
+      s0, s1 = s1, cell(s0, s1, self.tau, self._drop_path_prob, self._which_forward)
       if index == 2 * self._layerN + 1 and self.auxiliary != 0 and self.training:
         logits_aux = self.auxiliary_head(s1)
     #out = self.lastact(s1)
@@ -352,8 +369,8 @@ class NASNetworkCIFAR(_NASNetwork):
 
 class NASNetworkImageNet(_NASNetwork):
 
-  def __init__(self, C, N, steps, multiplier, stem_multiplier, num_classes, drop_prob, drop_path_prob, search_space, affine, track_running_stats, auxiliary):
-    super(NASNetworkImageNet, self).__init__(C, N, steps, multiplier, stem_multiplier, num_classes, drop_prob, drop_path_prob, search_space, affine, track_running_stats, auxiliary)
+  def __init__(self, C, N, steps, multiplier, stem_multiplier, num_classes, drop_prob, drop_path_prob, search_space, affine, track_running_stats, auxiliary, which_forward):
+    super(NASNetworkImageNet, self).__init__(C, N, steps, multiplier, stem_multiplier, num_classes, drop_prob, drop_path_prob, search_space, affine, track_running_stats, auxiliary, which_forward)
     self.stem0 = nn.Sequential(
       nn.Conv2d(3, C*stem_multiplier // 2, kernel_size=3, stride=2, padding=1, bias=False),
       nn.BatchNorm2d(C*stem_multiplier // 2),
@@ -395,7 +412,7 @@ class NASNetworkImageNet(_NASNetwork):
     s0 = self.stem0(input)
     s1 = self.stem1(s0)
     for index, cell in enumerate(self.cells):
-      s0, s1 = s1, cell(s0, s1, self.tau, self._drop_path_prob)
+      s0, s1 = s1, cell(s0, s1, self.tau, self._drop_path_prob, self._which_forward)
       if index == 2 * self._layerN + 1 and self.auxiliary != 0 and self.training:
         logits_aux = self.auxiliary_head(s1)
     #out = self.lastact(s1)

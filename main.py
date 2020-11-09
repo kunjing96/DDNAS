@@ -196,7 +196,7 @@ def main(xargs):
     from models import NASNetworkCIFAR as NASNetwork
   else:
     from models import NASNetworkImageNet as NASNetwork
-  search_model = NASNetwork(model_config.C, model_config.N, model_config.steps, model_config.multiplier, model_config.stem_multiplier, model_config.num_classes, model_config.drop_prob, model_config.drop_path_prob, model_config.space, model_config.affine, model_config.track_running_stats, config.auxiliary)
+  search_model = NASNetwork(model_config.C, model_config.N, model_config.steps, model_config.multiplier, model_config.stem_multiplier, model_config.num_classes, model_config.drop_prob, model_config.drop_path_prob, model_config.space, model_config.affine, model_config.track_running_stats, config.auxiliary, config.which_forward)
   logger.log('search-model :\n{:}'.format(search_model))
   logger.log('model-config : {:}'.format(model_config))
   
