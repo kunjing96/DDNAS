@@ -64,7 +64,7 @@ class MixedOp(nn.Module):
       elif which_forward == 'DARTS':
         return self.forward_darts(x)
       else:
-        raise ValueError('No {:} forward implementation.'.format(which_forward))
+        raise ValueError('No {:} forward implementation!'.format(which_forward))
     else:
       return self._ops[index](x) * weights[index]
 
