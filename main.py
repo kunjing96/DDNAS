@@ -262,7 +262,7 @@ def main(xargs):
 
   # start training
   from genotypes import GENOTYPES
-  start_time, search_time, epoch_time, warmup, total_epoch, gamma, genos, total_edges, num_unpruned_edges_1, num_unpruned_edges_2 = time.time(), AverageMeter(), AverageMeter(), config.warmup, (config.warmup+config.epochs)*2, config.gamma, GENOTYPES[xargs.init_genos], (model_config.N*3+2)*model_config.steps*2, 0, 0
+  start_time, search_time, epoch_time, warmup, total_epoch, gamma, genos, total_edges, num_unpruned_edges_1, num_unpruned_edges_2, has_arch_changed = time.time(), AverageMeter(), AverageMeter(), config.warmup, (config.warmup+config.epochs)*2, config.gamma, GENOTYPES[xargs.init_genos], (model_config.N*3+2)*model_config.steps*2, 0, 0, False
   for epoch in range(start_epoch, total_epoch):
     epoch_str = '{:03d}-{:03d}'.format(epoch, total_epoch)
     need_time = 'Time Left: {:}'.format( convert_secs2time(epoch_time.val * (total_epoch-epoch), True) )
@@ -296,10 +296,11 @@ def main(xargs):
       birth_rate = gamma_birth_rate * (1 + math.cos(math.pi * epoch / (total_epoch//2-1))) / 2 if epoch != total_epoch//2 - 1 else 0
       search_model.birth(birth_rate)
       num_unpruned_edges_1 = compute_num_unpruned_edges(search_model.genos)
+      has_arch_changed = has_arch_changed or (num_unpruned_edges_1 != num_unpruned_edges_2)
       logger.log('[{:}] birth_rate={:}, num_unpruned_edges={:}.'.format(epoch_str, birth_rate, num_unpruned_edges_1))
 
       # bn recalibration
-      if config.bn_recalibration:
+      if config.bn_recalibration and has_arch_changed:
         if config.optimization == 'one-level':
           with torch.no_grad():
             bn_calibration_v1(train_loader, network, search_model, config.bn_calibration_step)
@@ -308,6 +309,7 @@ def main(xargs):
             bn_calibration_v2(search_loader, network, search_model, config.bn_calibration_step)
         else:
           raise ValueError('No {:} optimization implementation!'.format(config.optimization))
+      has_arch_changed = False
 
       #search
       if config.optimization == 'one-level':
@@ -334,6 +336,7 @@ def main(xargs):
       prune_rate = gamma_prune_rate * (1 + math.cos(math.pi * epoch / (total_epoch//2-1) + math.pi)) / 2 if epoch != total_epoch//2 - 1 else 1
       search_model.prune(prune_rate)
       num_unpruned_edges_2 = compute_num_unpruned_edges(search_model.genos)
+      has_arch_changed = has_arch_changed or (num_unpruned_edges_1 != num_unpruned_edges_2)
       logger.log('[{:}] prune_rate={:}, num_unpruned_edges={:}.'.format(epoch_str, prune_rate, num_unpruned_edges_2))
 
     genotypes[epoch]        = search_model.genos
