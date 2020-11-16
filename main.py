@@ -175,6 +175,32 @@ def test_func(xloader, network, criterion, print_freq, logger):
   return losses.avg, top1.avg, top5.avg
 
 
+def bn_calibration(m, cumulative_bn_stats=True):
+  if isinstance(m, torch.nn.BatchNorm2d):
+    m.reset_running_stats()
+    m.train()
+    #if cumulative_bn_stats:
+    #  m.momentum = None
+
+
+def bn_calibration_v1(xloader, network, search_model, max_iter):
+  network.eval()
+  search_model.apply(bn_calibration)
+  for step, (inputs, targets) in enumerate(xloader):
+    if step >= max_iter: break
+    targets = targets.cuda(non_blocking=True)
+    _, _ = network(inputs)
+
+
+def bn_calibration_v2(xloader, network, search_model, max_iter):
+  network.eval()
+  search_model.apply(bn_calibration)
+  for step, (inputs, targets, _, _) in enumerate(xloader):
+    if step >= max_iter: break
+    targets = targets.cuda(non_blocking=True)
+    _, _ = network(inputs)
+
+
 def main(xargs):
   assert torch.cuda.is_available(), 'CUDA is not available.'
   torch.backends.cudnn.enabled   = True
@@ -271,6 +297,17 @@ def main(xargs):
       search_model.birth(birth_rate)
       num_unpruned_edges_1 = compute_num_unpruned_edges(search_model.genos)
       logger.log('[{:}] birth_rate={:}, num_unpruned_edges={:}.'.format(epoch_str, birth_rate, num_unpruned_edges_1))
+
+      # bn recalibration
+      if config.bn_recalibration:
+        if config.optimization == 'one-level':
+          with torch.no_grad():
+            bn_calibration_v1(train_loader, network, search_model, config.bn_calibration_step)
+        elif config.optimization == 'bi-level':
+          with torch.no_grad():
+            bn_calibration_v2(search_loader, network, search_model, config.bn_calibration_step)
+        else:
+          raise ValueError('No {:} optimization implementation!'.format(config.optimization))
 
       #search
       if config.optimization == 'one-level':
