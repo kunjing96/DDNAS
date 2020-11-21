@@ -144,7 +144,7 @@ def train_func(xloader, network, criterion, auxiliary, scheduler, optimizer, epo
   return losses.avg, top1.avg, top5.avg
 
 
-def test_func(xloader, network, criterion, print_freq, logger):
+def test_func(xloader, network, criterion, auxiliary, print_freq, logger):
   data_time, batch_time = AverageMeter(), AverageMeter()
   losses, top1, top5 = AverageMeter(), AverageMeter(), AverageMeter()
   network.eval()
@@ -155,8 +155,11 @@ def test_func(xloader, network, criterion, print_freq, logger):
     data_time.update(time.time() - end)
     
     # update the weights
-    logits, _ = network(inputs)
+    logits, logits_aux = network(inputs)
     loss = criterion(logits, targets)
+    if logits_aux is not None:
+      loss_aux = criterion(logits_aux, targets)
+      loss = loss + auxiliary*loss_aux
     # record
     prec1, prec5 = obtain_accuracy(logits.data, targets.data, topk=(1, 5))
     losses.update(loss.item(),  inputs.size(0))
@@ -213,7 +216,7 @@ def main(xargs):
   train_data, test_data, xshape, class_num = get_datasets(xargs.dataset, xargs.data_path, xargs.cutout)
   config = load_config(xargs.config_path, {'class_num': class_num, 'xshape': xshape}, logger)
   search_loader, train_loader, test_loader = get_nas_search_loaders(train_data, test_data, xargs.dataset, config.batch_size, xargs.workers)
-  logger.log('||||||| {:10s} ||||||| Search-Loader-Num={:}, batch size={:}'.format(xargs.dataset, len(search_loader), config.batch_size))
+  logger.log('||||||| {:10s} ||||||| Search-Loader-Num={:}, Train-Loader-Num={:}, Test-Loader-Num={:}, batch size={:}'.format(xargs.dataset, len(search_loader), len(train_loader), len(test_loader), config.batch_size))
   logger.log('||||||| {:10s} ||||||| Config={:}'.format(xargs.dataset, config))
 
   search_space = SearchSpaceNames[xargs.search_space_name]
@@ -284,7 +287,7 @@ def main(xargs):
 
       # valid
       with torch.no_grad():
-        test_loss, test_top1, test_top5 = test_func(test_loader, network, criterion, xargs.print_freq, logger)
+        test_loss, test_top1, test_top5 = test_func(test_loader, network, criterion, config.auxiliary, xargs.print_freq, logger)
       logger.log('[{:}] evaluate : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%.'.format(epoch_str, test_loss , test_top1 , test_top5 ))
     else:
       # update tau
@@ -328,7 +331,7 @@ def main(xargs):
 
       # valid
       with torch.no_grad():
-        test_loss, test_top1, test_top5 = test_func(test_loader, network, criterion, xargs.print_freq, logger)
+        test_loss, test_top1, test_top5 = test_func(test_loader, network, criterion, config.auxiliary, xargs.print_freq, logger)
       logger.log('[{:}] evaluate : loss={:.2f}, accuracy@1={:.2f}%, accuracy@5={:.2f}%.'.format(epoch_str, test_loss , test_top1 , test_top5 ))
 
       # update prune rate and prune edges
