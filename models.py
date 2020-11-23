@@ -164,16 +164,8 @@ class NASCell(nn.Module):
       l    , r     = self.geno[i][0], self.geno[i][1]
       if l[0] is None and l[1] == -1 and np.random.random() < prune_rate:
         l = new_l
-        node_str = '{:}<-{:}'.format(i+2, new_l[1])
-        self.ops[node_str].get_alpha().grad = None
       if r[0] is None and r[1] == -1 and np.random.random() < prune_rate:
         r = new_r
-        node_str = '{:}<-{:}'.format(i+2, new_r[1])
-        self.ops[node_str].get_alpha().grad = None
-      if l[0] is not None and l[1] != -1 and r[0] is not None and r[1] != -1:
-        for j in range(i+2):
-          node_str = '{:}<-{:}'.format(i+2, j)
-          self.ops[node_str].get_alpha().grad = None
       pruned_geno.append((l, r))
     self.geno = pruned_geno
 

@@ -302,16 +302,29 @@ def main(xargs):
       has_arch_changed = has_arch_changed or (num_unpruned_edges_1 != num_unpruned_edges_2)
       logger.log('[{:}] birth_rate={:}, num_unpruned_edges={:}.'.format(epoch_str, birth_rate, num_unpruned_edges_1))
 
-      # bn recalibration
-      if config.bn_recalibration and has_arch_changed:
-        if config.optimization == 'one-level':
-          with torch.no_grad():
-            bn_calibration_v1(train_loader, network, search_model, config.bn_calibration_step)
-        elif config.optimization == 'bi-level':
-          with torch.no_grad():
-            bn_calibration_v2(search_loader, network, search_model, config.bn_calibration_step)
-        else:
-          raise ValueError('No {:} optimization implementation!'.format(config.optimization))
+      if has_arch_changed:
+        # bn recalibration
+        if config.bn_recalibration:
+          if config.optimization == 'one-level':
+            with torch.no_grad():
+              bn_calibration_v1(train_loader, network, search_model, config.bn_calibration_step)
+          elif config.optimization == 'bi-level':
+            with torch.no_grad():
+              bn_calibration_v2(search_loader, network, search_model, config.bn_calibration_step)
+          else:
+            raise ValueError('No {:} optimization implementation!'.format(config.optimization))
+        # clear grad
+        for param in search_model.parameters():
+          param.grad = None
+        # clear grad stat
+        from collections import defaultdict
+        for group in w_optimizer.param_groups:
+          for p in group['params']:
+            w_optimizer.state[p] = defaultdict(dict)
+        for group in a_optimizer.param_groups:
+          for p in group['params']:
+            a_optimizer.state[p] = defaultdict(dict)
+
       has_arch_changed = False
 
       #search
