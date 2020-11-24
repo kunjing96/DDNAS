@@ -187,7 +187,7 @@ def bn_calibration(m, cumulative_bn_stats=True):
 
 
 def bn_calibration_v1(xloader, network, search_model, max_iter):
-  network.eval()
+  network.train()
   search_model.apply(bn_calibration)
   for step, (inputs, targets) in enumerate(xloader):
     if step >= max_iter: break
@@ -196,7 +196,7 @@ def bn_calibration_v1(xloader, network, search_model, max_iter):
 
 
 def bn_calibration_v2(xloader, network, search_model, max_iter):
-  network.eval()
+  network.train()
   search_model.apply(bn_calibration)
   for step, (inputs, targets, _, _) in enumerate(xloader):
     if step >= max_iter: break
@@ -303,16 +303,6 @@ def main(xargs):
       logger.log('[{:}] birth_rate={:}, num_unpruned_edges={:}.'.format(epoch_str, birth_rate, num_unpruned_edges_1))
 
       if has_arch_changed:
-        # bn recalibration
-        if config.bn_recalibration:
-          if config.optimization == 'one-level':
-            with torch.no_grad():
-              bn_calibration_v1(train_loader, network, search_model, config.bn_calibration_step)
-          elif config.optimization == 'bi-level':
-            with torch.no_grad():
-              bn_calibration_v2(search_loader, network, search_model, config.bn_calibration_step)
-          else:
-            raise ValueError('No {:} optimization implementation!'.format(config.optimization))
         # clear grad
         for param in search_model.parameters():
           param.grad = None
@@ -324,6 +314,16 @@ def main(xargs):
         for group in a_optimizer.param_groups:
           for p in group['params']:
             a_optimizer.state[p] = defaultdict(dict)
+        # bn recalibration
+        if config.bn_recalibration:
+          if config.optimization == 'one-level':
+            with torch.no_grad():
+              bn_calibration_v1(train_loader, network, search_model, config.bn_calibration_step)
+          elif config.optimization == 'bi-level':
+            with torch.no_grad():
+              bn_calibration_v2(search_loader, network, search_model, config.bn_calibration_step)
+          else:
+            raise ValueError('No {:} optimization implementation!'.format(config.optimization))
 
       has_arch_changed = False
 
@@ -395,6 +395,8 @@ def main(xargs):
     # measure elapsed time
     epoch_time.update(time.time() - start_time)
     start_time = time.time()
+
+    torch.cuda.empty_cache()
 
   logger.log('\n' + '-'*100)
   # check the performance from the architecture dataset
